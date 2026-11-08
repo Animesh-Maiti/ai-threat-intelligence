@@ -53,12 +53,17 @@ async def analyze_url_endpoint(payload: URLAnalysisRequest):
     score = 10.0
     indicators: List[str] = []
     
+    # DNS / Reachability check
+    if tls_data.get("error") and "Could not resolve" in str(tls_data.get("error")):
+        score += 45.0
+        indicators.append("Domain does not resolve via public DNS (potentially sinkholed, inactive, or malformed)")
+    
     # Feed hits trigger confirmed malicious classification
     if feed_data.get("is_listed"):
         score = 95.0
         indicators.append(f"Blacklist Match: URLhaus tagged as {feed_data.get('threat')}")
     
-    if not tls_data.get("is_valid"):
+    if not tls_data.get("is_valid") and not (tls_data.get("error") and "resolve" in str(tls_data.get("error"))):
         score += 40.0
         indicators.append("Invalid or unverified SSL/TLS Certificate")
         
@@ -81,7 +86,7 @@ async def analyze_url_endpoint(payload: URLAnalysisRequest):
         risk = RiskClassification.LOW_RISK
 
     summary = (
-        f"Domain certificate status: {'Valid' if tls_data.get('is_valid') else 'Untrusted/Invalid'}. "
+        f"Domain certificate status: {'Valid' if tls_data.get('is_valid') else 'Untrusted/Invalid/Unreachable'}. "
         f"Found {len(indicators)} technical security indicator(s)."
     )
 
@@ -103,7 +108,6 @@ async def analyze_url_endpoint(payload: URLAnalysisRequest):
         report_sha256=report_hash,
         on_chain_tx=None
     )
-
 @router.post("/analyze/message", response_model=ThreatAnalysisResponse)
 async def analyze_message_endpoint(payload: MessageAnalysisRequest):
     ai_result = analyze_scam_with_ai(payload.content, payload.context or "SMS/Email")
