@@ -20,7 +20,7 @@ def run_tests():
     for url in BENCHMARK_URLS:
         print(f"\n[Testing URL]: {url}")
         try:
-            res = requests.post(f"{BASE_URL}/analyze/url", json={"url": url}, timeout=10)
+            res = requests.post(f"{BASE_URL}/analyze/url", json={"url": url}, timeout=15)
             if res.status_code == 200:
                 data = res.json()
                 print(f" -> Risk Tier : {data['risk_level']}")

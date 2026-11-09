@@ -13,6 +13,8 @@ from app.schemas.payloads import (
 from app.core.security import validate_target_url
 from app.modules.tls_inspector import inspect_tls_certificate
 from app.modules.scam_analyzer import analyze_scam_with_ai
+from app.modules.header_auditor import audit_security_headers
+from app.modules.url_analyzer import analyze_url_structure, trace_redirects
 
 router = APIRouter()
 
@@ -24,7 +26,7 @@ def check_urlhaus_feed(target_url: str) -> Dict[str, Any]:
     """
     Passive threat intelligence check against URLhaus public API.
     """
-    endpoint = "[https://urlhaus-api.abuse.ch/v1/url/](https://urlhaus-api.abuse.ch/v1/url/)"
+    endpoint = "https://urlhaus-api.abuse.ch/v1/url/"
     try:
         resp = requests.post(endpoint, data={"url": target_url}, timeout=3.0)
         if resp.status_code == 200:
@@ -41,15 +43,22 @@ def check_urlhaus_feed(target_url: str) -> Dict[str, Any]:
 
 @router.post("/analyze/url", response_model=ThreatAnalysisResponse)
 async def analyze_url_endpoint(payload: URLAnalysisRequest):
-    # 1. SSRF Guard
+    # 1. Deterministic SSRF Guard
     target_url = validate_target_url(payload.url)
     
-    # 2. TLS / Trust Inspector
+    # 2. TLS / Certificate Trust Inspector
     tls_data = inspect_tls_certificate(target_url)
     
     # 3. Live Threat Feed Lookup
     feed_data = check_urlhaus_feed(target_url)
     
+    # 4. Passive Structural Heuristics & Typosquatting
+    url_analysis = analyze_url_structure(target_url)
+    redirect_chain = trace_redirects(target_url, max_hops=3, timeout=3.0)
+    
+    # 5. Passive Security Header Audit
+    headers_audit = audit_security_headers(target_url, timeout=3.0)
+
     score = 10.0
     indicators: List[str] = []
     
@@ -74,6 +83,30 @@ async def analyze_url_endpoint(payload: URLAnalysisRequest):
     if not tls_data.get("san_matches") and tls_data.get("is_valid"):
         score += 25.0
         indicators.append("Hostname mismatch against Subject Alternative Names (SAN)")
+
+    # Heuristic scoring additions
+    if url_analysis.get("is_homoglyph"):
+        score += 35.0
+        indicators.append("Homoglyph / Punycode character obfuscation detected in domain")
+
+    if matched_brand := url_analysis.get("matched_brand"):
+        score += 30.0
+        indicators.append(f"Typosquatting brand impersonation targeting '{matched_brand}'")
+
+    if url_analysis.get("entropy_score", 0.0) > 4.2:
+        score += 15.0
+        indicators.append(f"High domain randomness/entropy ({url_analysis.get('entropy_score'):.2f}) indicative of DGA")
+
+    for flag in url_analysis.get("suspicious_flags", []):
+        if flag in {"excessive_subdomains", "embedded_credentials"} and flag not in indicators:
+            score += 10.0
+            indicators.append(f"Suspicious URL pattern: {flag.replace('_', ' ')}")
+
+    # Defensive header check (lack of defensive headers slightly increases risk baseline)
+    missing_headers = headers_audit.get("missing_headers", [])
+    if len(missing_headers) >= 3:
+        score += 5.0
+        indicators.append(f"Lacks critical defensive headers: {', '.join(missing_headers[:2])}")
 
     # Official 5-tier mapping
     if score >= 85.0:
@@ -103,11 +136,18 @@ async def analyze_url_endpoint(payload: URLAnalysisRequest):
         confidence_score=round(min(score / 100.0, 1.0), 2),
         summary=summary,
         detected_indicators=indicators,
-        technical_evidence={"tls": tls_data, "threat_intel": feed_data},
+        technical_evidence={
+            "tls": tls_data,
+            "threat_intel": feed_data,
+            "url_structure": url_analysis,
+            "redirect_chain": redirect_chain,
+            "security_headers": headers_audit
+        },
         recommended_actions=recommended,
         report_sha256=report_hash,
         on_chain_tx=None
     )
+
 @router.post("/analyze/message", response_model=ThreatAnalysisResponse)
 async def analyze_message_endpoint(payload: MessageAnalysisRequest):
     ai_result = analyze_scam_with_ai(payload.content, payload.context or "SMS/Email")
