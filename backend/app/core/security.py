@@ -78,11 +78,23 @@ def validate_target_url(url: str) -> str:
             raise HTTPException(status_code=400, detail="Invalid URL or domain format")
 
         try:
-            addresses = {
-                ipaddress.ip_address(result[4][0])
-                for result in socket.getaddrinfo(
-                    normalized_hostname, port, type=socket.SOCK_STREAM
+            try:
+                address_results = socket.getaddrinfo(
+                    normalized_hostname,
+                    None,
+                    type=socket.SOCK_STREAM,
+                    flags=getattr(socket, "AI_ADDRCONFIG", 0),
                 )
+            except (socket.gaierror, OSError):
+                address_results = socket.getaddrinfo(
+                    normalized_hostname, None, type=socket.SOCK_STREAM
+                )
+            if not address_results:
+                address_results = socket.getaddrinfo(
+                    normalized_hostname, None, type=socket.SOCK_STREAM
+                )
+            addresses = {
+                ipaddress.ip_address(result[4][0]) for result in address_results
             }
         except (socket.gaierror, OSError):
             addresses = set()

@@ -601,7 +601,8 @@ export default function ThreatDashboard() {
           {activeResult && verdict && (
             <section className="mt-8 space-y-5" aria-live="polite">
               <div className={`rounded-3xl border p-5 shadow-sm sm:p-7 ${verdict.panel}`}>
-                {activeResult.campaign_correlation?.is_campaign && (
+                {activeResult.campaign_correlation?.is_campaign &&
+                  activeResult.risk_level !== "Low Risk" && (
                   <div className="mb-6 rounded-2xl border border-amber-300 bg-gradient-to-r from-amber-50 via-rose-50 to-white p-4 shadow-sm sm:p-5">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <h2 className="flex items-center gap-2 font-bold text-rose-800">

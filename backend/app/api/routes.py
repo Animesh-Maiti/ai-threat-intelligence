@@ -54,6 +54,15 @@ _HIGH_RISK_TLDS = {
     "work",
     "xyz",
 }
+SAFE_DOMAINS = {
+    "google.com",
+    "youtube.com",
+    "github.com",
+    "microsoft.com",
+    "apple.com",
+    "adamasuniversity.ac.in",
+    "onlinesbi.sbi",
+}
 _PROBE_EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="threat-probe")
 _PROBE_WAIT_SECONDS = 1.8
 
@@ -74,6 +83,15 @@ def resolve_incident_ip(domain: str) -> Optional[str]:
 def compute_report_hash(target: str, risk: str, summary: str) -> str:
     payload = f"{target}|{risk}|{summary}|{int(time.time())}"
     return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def _is_verified_safe_domain(hostname: str) -> bool:
+    normalized_hostname = hostname.rstrip(".").lower()
+    return any(
+        normalized_hostname == safe_domain
+        or normalized_hostname.endswith(f".{safe_domain}")
+        for safe_domain in SAFE_DOMAINS
+    )
 
 
 def _get_probe_result(future: Future, completed: set[Future], fallback: Any) -> Any:
@@ -204,7 +222,7 @@ async def analyze_url_endpoint(payload: URLAnalysisRequest):
         score = 95.0
         indicators.append(f"Blacklist Match: URLhaus tagged as {feed_data.get('threat')}")
 
-    if not tls_data.get("is_valid") and not (tls_data.get("error") and "resolve" in str(tls_data.get("error"))):
+    if not host_unreachable and not tls_data.get("is_valid"):
         score += 40.0
         indicators.append("Invalid or unverified SSL/TLS Certificate")
         
@@ -273,20 +291,51 @@ async def analyze_url_endpoint(payload: URLAnalysisRequest):
         "security_txt", {}
     ).get("accessible", False)
 
+    # Unreachable hosts are inconclusive unless independent evidence indicates abuse.
+    has_abuse_evidence = bool(
+        feed_data.get("is_listed")
+        or url_analysis.get("matched_brand")
+        or url_analysis.get("is_typosquatting")
+        or url_analysis.get("is_homoglyph")
+    )
+    is_safe_domain = (
+        _is_verified_safe_domain(parsed_domain) and not feed_data.get("is_listed")
+    )
+    is_unreachable_without_abuse_evidence = host_unreachable and not has_abuse_evidence
+
     # Classify and generate the report after all audit findings have been scored.
-    if score >= 85.0:
+    if is_safe_domain:
+        score = 5.0
+        indicators.clear()
+        risk = RiskClassification.LOW_RISK
+        confidence_score = 0.95
+        summary = "Verified legitimate web property."
+    elif is_unreachable_without_abuse_evidence:
+        score = min(score, 30.0)
+        risk = RiskClassification.INCONCLUSIVE
+        confidence_score = round(min(score / 100.0, 1.0), 2)
+        summary = (
+            "The host could not be reached during this scan. No independent "
+            "brand-spoofing or threat-feed evidence was found."
+        )
+    elif score >= 85.0:
         risk = RiskClassification.CONFIRMED_MALICIOUS
+        confidence_score = round(min(score / 100.0, 1.0), 2)
     elif score >= 50.0:
         risk = RiskClassification.HIGH_RISK
+        confidence_score = round(min(score / 100.0, 1.0), 2)
     elif score >= 25.0:
         risk = RiskClassification.SUSPICIOUS
+        confidence_score = round(min(score / 100.0, 1.0), 2)
     else:
         risk = RiskClassification.LOW_RISK
+        confidence_score = round(min(score / 100.0, 1.0), 2)
 
-    summary = (
-        f"Domain certificate status: {'Valid' if tls_data.get('is_valid') else 'Untrusted/Invalid/Unreachable'}. "
-        f"Found {len(indicators)} technical security indicator(s)."
-    )
+    if not is_safe_domain and not is_unreachable_without_abuse_evidence:
+        summary = (
+            f"Domain certificate status: {'Valid' if tls_data.get('is_valid') else 'Untrusted/Invalid/Unreachable'}. "
+            f"Found {len(indicators)} technical security indicator(s)."
+        )
 
     recommended = [
         "Do not enter passwords, OTPs, or financial information on unverified domains.",
@@ -299,21 +348,31 @@ async def analyze_url_endpoint(payload: URLAnalysisRequest):
         report_sha256=report_hash,
         target=target_url,
         risk_level=risk.value,
-        confidence_score=round(min(score / 100.0, 1.0), 2)
+        confidence_score=confidence_score
     )
 
-    campaign_correlation = correlate_incident({
-        "target": target_url,
-        "target_domain": parsed_domain,
-        "brand_targeted": url_analysis.get("matched_brand"),
-        "resolved_ip": resolved_ip,
-        "indicators": indicators,
-    })
+    if is_safe_domain:
+        campaign_correlation = {
+            "is_campaign": False,
+            "campaign_id": None,
+            "related_reports_count": 0,
+            "correlated_indicators": [],
+            "explanation": "",
+        }
+    else:
+        campaign_correlation = correlate_incident({
+            "target": target_url,
+            "target_domain": parsed_domain,
+            "brand_targeted": url_analysis.get("matched_brand"),
+            "resolved_ip": resolved_ip,
+            "indicators": indicators,
+            "risk_level": risk.value,
+        })
 
     return ThreatAnalysisResponse(
         target=target_url,
         risk_level=risk,
-        confidence_score=round(min(score / 100.0, 1.0), 2),
+        confidence_score=confidence_score,
         summary=summary,
         campaign_correlation=campaign_correlation,
         detected_indicators=indicators,
@@ -387,6 +446,7 @@ async def analyze_message_endpoint(payload: MessageAnalysisRequest):
         "brand_targeted": brand_targeted,
         "resolved_ip": resolve_incident_ip(message_domain or ""),
         "indicators": indicators,
+        "risk_level": risk.value,
     })
 
     return ThreatAnalysisResponse(

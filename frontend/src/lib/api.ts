@@ -24,6 +24,13 @@ export interface ThreatAnalysisResponse {
   on_chain_tx: string | null;
 }
 
+export interface VerificationResponse {
+  report_sha256: string;
+  is_verified: boolean;
+  on_chain_tx: string | null;
+  audit_data: Record<string, any> | null;
+}
+
 const API_BASE_URL = 
     process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
 
@@ -63,6 +70,19 @@ export async function analyzeMessage(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ content, context }),
   });
+
+  if (!response.ok) {
+    const errorBody = await response.json().catch(() => ({}));
+    throw new Error(errorBody.detail || `Request failed with status ${response.status}`);
+  }
+
+  return response.json();
+}
+
+export async function verifyHash(hash: string): Promise<VerificationResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/verify/hash/${encodeURIComponent(hash)}`
+  );
 
   if (!response.ok) {
     const errorBody = await response.json().catch(() => ({}));

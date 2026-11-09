@@ -57,6 +57,20 @@ _NON_SPECIFIC_BRANDS = {
     "financial / institutional entity",
     "financial institution",
 }
+_SAFE_RISK_LEVELS = {"low risk", "safe"}
+_SUSPICIOUS_INDICATOR_TERMS = (
+    "suspicious",
+    "malicious",
+    "phish",
+    "scam",
+    "fraud",
+    "typosquat",
+    "impersonat",
+    "social engineering",
+    "coercive",
+    "high urgency",
+    "high-risk top-level domain",
+)
 
 
 def _normalize_domain(value: Any) -> Optional[str]:
@@ -96,6 +110,24 @@ def _normalize_brand(value: Any) -> Optional[str]:
     if brand.casefold() in _NON_SPECIFIC_BRANDS:
         return None
     return brand.casefold()
+
+
+def _has_suspicious_indicators(indicators: Any) -> bool:
+    if not isinstance(indicators, list):
+        return False
+    return any(
+        isinstance(indicator, str)
+        and any(term in indicator.casefold() for term in _SUSPICIOUS_INDICATOR_TERMS)
+        for indicator in indicators
+    )
+
+
+def _is_safe_unflagged(risk_level: Any, indicators: Any) -> bool:
+    return (
+        isinstance(risk_level, str)
+        and risk_level.strip().casefold() in _SAFE_RISK_LEVELS
+        and not _has_suspicious_indicators(indicators)
+    )
 
 
 def _extract_brand(target: str, domain: str, existing_brand: Optional[str]) -> Optional[str]:
@@ -158,6 +190,8 @@ def _matches(
     apex_domain: Optional[str],
     resolved_ip: Optional[str],
 ) -> bool:
+    if _is_safe_unflagged(record.get("risk_level"), record.get("indicators")):
+        return False
     record_domain_value = _normalize_domain(record.get("target_domain"))
     record_brand = _normalize_brand(
         _extract_brand(
@@ -196,6 +230,15 @@ def correlate_incident(incident_data: dict) -> dict:
     indicators = incident_data.get("indicators", [])
     if not isinstance(indicators, list):
         indicators = []
+    risk_level = incident_data.get("risk_level")
+    if _is_safe_unflagged(risk_level, indicators):
+        return {
+            "is_campaign": False,
+            "campaign_id": None,
+            "related_reports_count": 0,
+            "correlated_indicators": [],
+            "explanation": "",
+        }
 
     with _HISTORY_LOCK:
         history = _load_history()
@@ -246,6 +289,7 @@ def correlate_incident(incident_data: dict) -> dict:
             "brand_targeted": resolved_brand,
             "resolved_ip": resolved_ip,
             "indicators": indicators,
+            "risk_level": risk_level,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         if campaign_id:
