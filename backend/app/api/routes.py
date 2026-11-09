@@ -1,6 +1,12 @@
+from app.modules.extended_auditor import (
+    check_certificate_transparency,
+    audit_server_banner_vulnerabilities,
+    inspect_public_metadata_endpoints
+)
 from app.modules.web3_logger import record_threat_on_chain
 import hashlib
 import time
+import urllib.parse
 from typing import Dict, Any, List
 import requests
 from fastapi import APIRouter
@@ -109,7 +115,39 @@ async def analyze_url_endpoint(payload: URLAnalysisRequest):
         score += 5.0
         indicators.append(f"Lacks critical defensive headers: {', '.join(missing_headers[:2])}")
 
-    # Official 5-tier mapping
+    technical_evidence = {
+        "tls": tls_data,
+        "threat_intel": feed_data,
+        "url_structure": url_analysis,
+        "redirect_chain": redirect_chain,
+        "security_headers": headers_audit,
+    }
+
+    # Certificate Transparency (CT) logging audit
+    parsed_domain = urllib.parse.urlparse(target_url).hostname or ""
+    ct_audit = check_certificate_transparency(parsed_domain)
+    if ct_audit.get("ct_logged") is False and "error" in ct_audit:
+        if "No Certificate Transparency records" in ct_audit["error"]:
+            indicators.append("Certificate Transparency anomaly: domain not found in public CT append-only logs.")
+            score += 15
+
+    # Known software and version vulnerability check
+    server_hdr = headers_audit.get("exposed_server") or ""
+    powered_hdr = headers_audit.get("exposed_powered_by") or ""
+    cve_indicators = audit_server_banner_vulnerabilities(server_hdr, powered_hdr)
+    if cve_indicators:
+        indicators.extend(cve_indicators)
+        score += 20
+
+    # Public metadata policy inspection
+    metadata_audit = inspect_public_metadata_endpoints(target_url)
+    technical_evidence["certificate_transparency"] = ct_audit
+    technical_evidence["public_metadata_endpoints"] = metadata_audit
+    technical_evidence["security_policy_present"] = metadata_audit.get(
+        "security_txt", {}
+    ).get("accessible", False)
+
+    # Classify and generate the report after all audit findings have been scored.
     if score >= 85.0:
         risk = RiskClassification.CONFIRMED_MALICIOUS
     elif score >= 50.0:
@@ -131,7 +169,6 @@ async def analyze_url_endpoint(payload: URLAnalysisRequest):
 
     report_hash = compute_report_hash(target_url, risk.value, summary)
 
-    # Record report integrity on-chain
     tx_hash = record_threat_on_chain(
         report_sha256=report_hash,
         target=target_url,
@@ -145,13 +182,7 @@ async def analyze_url_endpoint(payload: URLAnalysisRequest):
         confidence_score=round(min(score / 100.0, 1.0), 2),
         summary=summary,
         detected_indicators=indicators,
-        technical_evidence={
-            "tls": tls_data,
-            "threat_intel": feed_data,
-            "url_structure": url_analysis,
-            "redirect_chain": redirect_chain,
-            "security_headers": headers_audit
-        },
+        technical_evidence=technical_evidence,
         recommended_actions=recommended,
         report_sha256=report_hash,
         on_chain_tx=tx_hash
