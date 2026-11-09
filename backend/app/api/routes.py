@@ -11,6 +11,7 @@ import socket
 import time
 import urllib.error
 import urllib.parse
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from typing import Dict, Any, List, Optional
 import requests
 from fastapi import APIRouter
@@ -53,6 +54,8 @@ _HIGH_RISK_TLDS = {
     "work",
     "xyz",
 }
+_PROBE_EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="threat-probe")
+_PROBE_WAIT_SECONDS = 1.8
 
 
 def resolve_incident_ip(domain: str) -> Optional[str]:
@@ -72,13 +75,23 @@ def compute_report_hash(target: str, risk: str, summary: str) -> str:
     payload = f"{target}|{risk}|{summary}|{int(time.time())}"
     return hashlib.sha256(payload.encode()).hexdigest()
 
+
+def _get_probe_result(future: Future, completed: set[Future], fallback: Any) -> Any:
+    if future not in completed:
+        return fallback
+    try:
+        return future.result()
+    except _PROBE_ERRORS + (ValueError, TypeError, KeyError):
+        return fallback
+
+
 def check_urlhaus_feed(target_url: str) -> Dict[str, Any]:
     """
     Passive threat intelligence check against URLhaus public API.
     """
     endpoint = "https://urlhaus-api.abuse.ch/v1/url/"
     try:
-        resp = requests.post(endpoint, data={"url": target_url}, timeout=3.0)
+        resp = requests.post(endpoint, data={"url": target_url}, timeout=1.5)
         if resp.status_code == 200:
             data = resp.json()
             if data.get("query_status") == "is_listed":
@@ -98,48 +111,72 @@ async def analyze_url_endpoint(payload: URLAnalysisRequest):
     target_url = validate_target_url(payload.url)
 
     parsed_domain = urllib.parse.urlsplit(target_url).hostname or ""
-    resolved_ip = resolve_incident_ip(parsed_domain)
 
-    # 2. TLS / Certificate Trust Inspector
-    try:
-        tls_data = inspect_tls_certificate(target_url)
-    except _PROBE_ERRORS as exc:
-        tls_data = {
-            "is_valid": False,
-            "subject": None,
-            "issuer": None,
-            "expiry_date": None,
-            "san_matches": False,
-            "is_untrusted_ca": False,
-            "notes": [f"Connection unavailable: {type(exc).__name__}"],
-            "error": "Target host unavailable",
-        }
+    tls_fallback = {
+        "is_valid": False,
+        "subject": None,
+        "issuer": None,
+        "expiry_date": None,
+        "san_matches": False,
+        "is_untrusted_ca": False,
+        "notes": ["Connection unavailable during the scan time limit"],
+        "error": "Target host unavailable",
+    }
+    headers_fallback = {
+        "missing_headers": [
+            "Strict-Transport-Security",
+            "Content-Security-Policy",
+            "X-Frame-Options",
+            "X-Content-Type-Options",
+        ],
+        "exposed_server": None,
+        "exposed_powered_by": None,
+        "error": "Request failed",
+    }
 
-    # 3. Live Threat Feed Lookup
-    feed_data = check_urlhaus_feed(target_url)
+    probes = {
+        "resolved_ip": _PROBE_EXECUTOR.submit(resolve_incident_ip, parsed_domain),
+        "tls": _PROBE_EXECUTOR.submit(inspect_tls_certificate, target_url, timeout=1.5),
+        "feed": _PROBE_EXECUTOR.submit(check_urlhaus_feed, target_url),
+        "redirects": _PROBE_EXECUTOR.submit(
+            trace_redirects, target_url, max_hops=1, timeout=1.5
+        ),
+        "headers": _PROBE_EXECUTOR.submit(
+            audit_security_headers, target_url, timeout=1.5
+        ),
+        "ct": _PROBE_EXECUTOR.submit(
+            check_certificate_transparency, parsed_domain, timeout=1.2
+        ),
+        "metadata": _PROBE_EXECUTOR.submit(
+            inspect_public_metadata_endpoints, target_url, timeout=1.0
+        ),
+    }
+    completed_probes, pending_probes = wait(
+        probes.values(), timeout=_PROBE_WAIT_SECONDS
+    )
+    for pending_probe in pending_probes:
+        pending_probe.cancel()
+    resolved_ip = _get_probe_result(probes["resolved_ip"], completed_probes, None)
+    tls_data = _get_probe_result(probes["tls"], completed_probes, tls_fallback)
+    feed_data = _get_probe_result(
+        probes["feed"], completed_probes, {"is_listed": False, "threat": None, "tags": []}
+    )
+    redirect_chain = _get_probe_result(probes["redirects"], completed_probes, [target_url])
+    headers_audit = _get_probe_result(probes["headers"], completed_probes, headers_fallback)
+    ct_audit = _get_probe_result(
+        probes["ct"], completed_probes, {"ct_logged": None, "status": "upstream_skipped"}
+    )
+    metadata_audit = _get_probe_result(
+        probes["metadata"],
+        completed_probes,
+        {
+            "security_txt": {"accessible": False, "status_code": None},
+            "robots_txt": {"accessible": False, "status_code": None},
+        },
+    )
 
-    # 4. Passive Structural Heuristics & Typosquatting
+    # Passive Structural Heuristics & Typosquatting
     url_analysis = analyze_url_structure(target_url)
-    try:
-        redirect_chain = trace_redirects(target_url, max_hops=3, timeout=3.0)
-    except _PROBE_ERRORS:
-        redirect_chain = []
-
-    # 5. Passive Security Header Audit
-    try:
-        headers_audit = audit_security_headers(target_url, timeout=3.0)
-    except _PROBE_ERRORS as exc:
-        headers_audit = {
-            "missing_headers": [
-                "Strict-Transport-Security",
-                "Content-Security-Policy",
-                "X-Frame-Options",
-                "X-Content-Type-Options",
-            ],
-            "exposed_server": None,
-            "exposed_powered_by": None,
-            "error": f"Connection unavailable: {type(exc).__name__}",
-        }
 
     score = 10.0
     indicators: List[str] = []
@@ -217,7 +254,6 @@ async def analyze_url_endpoint(payload: URLAnalysisRequest):
     }
 
     # Certificate Transparency (CT) logging audit
-    ct_audit = check_certificate_transparency(parsed_domain)
     if ct_audit.get("ct_logged") is False and "error" in ct_audit:
         if "No Certificate Transparency records" in ct_audit["error"]:
             indicators.append("Certificate Transparency anomaly: domain not found in public CT append-only logs.")
@@ -231,8 +267,6 @@ async def analyze_url_endpoint(payload: URLAnalysisRequest):
         indicators.extend(cve_indicators)
         score += 20
 
-    # Public metadata policy inspection
-    metadata_audit = inspect_public_metadata_endpoints(target_url)
     technical_evidence["certificate_transparency"] = ct_audit
     technical_evidence["public_metadata_endpoints"] = metadata_audit
     technical_evidence["security_policy_present"] = metadata_audit.get(

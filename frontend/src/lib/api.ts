@@ -28,18 +28,30 @@ const API_BASE_URL =
     process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
 
 export async function analyzeUrl(url: string): Promise<ThreatAnalysisResponse> {
-  const response = await fetch(`${API_BASE_URL}/analyze/url`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url }),
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 25_000);
+  try {
+    const response = await fetch(`${API_BASE_URL}/analyze/url`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+      signal: controller.signal,
+    });
 
-  if (!response.ok) {
-    const errorBody = await response.json().catch(() => ({}));
-    throw new Error(errorBody.detail || `Request failed with status ${response.status}`);
+    if (!response.ok) {
+      const errorBody = await response.json().catch(() => ({}));
+      throw new Error(errorBody.detail || `Request failed with status ${response.status}`);
+    }
+
+    return await response.json();
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error("The scan is taking longer than expected. Please try again.");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
   }
-
-  return response.json();
 }
 
 export async function analyzeMessage(

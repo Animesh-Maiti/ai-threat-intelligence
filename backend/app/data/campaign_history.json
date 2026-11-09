@@ -91,5 +91,59 @@
     ],
     "timestamp": "2026-11-09T16:16:26.248468+00:00",
     "campaign_id": "CAMP-SBI-PHISH-01"
+  },
+  {
+    "target": "http://sbi-kyc-reactivate.top",
+    "target_domain": "sbi-kyc-reactivate.top",
+    "brand_targeted": "SBI",
+    "resolved_ip": null,
+    "indicators": [
+      "Detected manipulative social engineering patterns",
+      "High urgency and psychological coercion",
+      "Coercive urgency tactics detected",
+      "Direct external action/link provided in unverified message",
+      "Contains external link: http://sbi-kyc-reactivate.top"
+    ],
+    "timestamp": "2026-11-09T16:30:05.962157+00:00",
+    "campaign_id": "CAMP-SBI-PHISH-01"
+  },
+  {
+    "target": "https://a.com",
+    "target_domain": "a.com",
+    "brand_targeted": null,
+    "resolved_ip": null,
+    "indicators": [
+      "Invalid or unverified SSL/TLS Certificate",
+      "Lacks critical defensive headers: Strict-Transport-Security, Content-Security-Policy"
+    ],
+    "timestamp": "2026-11-09T16:31:04.853545+00:00"
+  },
+  {
+    "target": "https://abc.com",
+    "target_domain": "abc.com",
+    "brand_targeted": "SBI",
+    "resolved_ip": "54.192.151.110",
+    "indicators": [
+      "Typosquatting brand impersonation targeting 'sbi'",
+      "Lacks critical defensive headers: Strict-Transport-Security, X-Frame-Options"
+    ],
+    "timestamp": "2026-11-09T16:32:45.198294+00:00",
+    "campaign_id": "CAMP-SBI-PHISH-01"
+  },
+  {
+    "target": "https://x.com",
+    "target_domain": "x.com",
+    "brand_targeted": null,
+    "resolved_ip": "172.66.0.227",
+    "indicators": [],
+    "timestamp": "2026-11-09T16:45:35.215377+00:00"
+  },
+  {
+    "target": "https://youtube.com",
+    "target_domain": "youtube.com",
+    "brand_targeted": null,
+    "resolved_ip": "192.179.20.136",
+    "indicators": [],
+    "timestamp": "2026-11-09T16:47:10.707024+00:00"
   }
 ]

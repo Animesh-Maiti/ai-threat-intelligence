@@ -14,7 +14,7 @@ KNOWN_LEGACY_VERSIONS = {
 }
 
 
-def check_certificate_transparency(domain: str, timeout: float = 3.5) -> Dict[str, Any]:
+def check_certificate_transparency(domain: str, timeout: float = 1.2) -> Dict[str, Any]:
     """
     Passively checks if the domain certificate appears in public Certificate Transparency logs.
     """
@@ -25,7 +25,7 @@ def check_certificate_transparency(domain: str, timeout: float = 3.5) -> Dict[st
         resp = requests.get(
             ct_url,
             headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ThreatAudit/1.0"},
-            timeout=timeout
+            timeout=min(timeout, 1.2)
         )
         if resp.status_code == 200:
             entries = resp.json()
@@ -41,7 +41,9 @@ def check_certificate_transparency(domain: str, timeout: float = 3.5) -> Dict[st
                 "log_count": 0,
                 "note": "No public CT log entry found"
             }
-    except Exception as exc:
+    except requests.exceptions.Timeout:
+        return {"ct_logged": None, "status": "upstream_skipped"}
+    except (requests.RequestException, ValueError):
         # Fallback to true for established domains if crt.sh is congested
         is_known_root = clean_domain.endswith((".com", ".org", ".ac.in", ".edu", ".gov"))
         return {
@@ -70,7 +72,7 @@ def audit_server_banner_vulnerabilities(server_header: str, powered_by_header: s
     return detected_flaws
 
 
-def inspect_public_metadata_endpoints(base_url: str, timeout: float = 2.0) -> Dict[str, Any]:
+def inspect_public_metadata_endpoints(base_url: str, timeout: float = 1.0) -> Dict[str, Any]:
     """
     Passively checks standard public policy endpoints (robots.txt, security.txt).
     Non-intrusive: only evaluates HTTP status and content-type.
@@ -90,14 +92,14 @@ def inspect_public_metadata_endpoints(base_url: str, timeout: float = 2.0) -> Di
             resp = requests.head(
                 target_endpoint,
                 headers={"User-Agent": "SecurityAuditor/1.0"},
-                timeout=timeout,
+                timeout=min(timeout, 1.0),
                 allow_redirects=False
             )
             results[name] = {
                 "accessible": resp.status_code == 200,
                 "status_code": resp.status_code
             }
-        except Exception:
+        except requests.RequestException:
             results[name] = {"accessible": False, "status_code": None}
 
     return results
