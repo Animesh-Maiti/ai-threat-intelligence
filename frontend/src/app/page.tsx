@@ -1,695 +1,980 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
+import {
+  analyzeMessage,
+  analyzeUrl,
+  ThreatAnalysisResponse,
+  VerificationResponse,
+  verifyHash,
+} from "@/lib/api";
 
-interface ThreatResponse {
-  target: string;
-  risk_level: string;
-  confidence_score: number;
-  summary: string;
-  campaign_correlation?: {
-    is_campaign: boolean;
-    campaign_id: string | null;
-    related_reports_count: number;
-    correlated_indicators: string[];
-    explanation: string;
-  };
-  detected_indicators: string[];
-  technical_evidence: Record<string, any>;
-  recommended_actions: string[];
-  report_sha256: string;
-  on_chain_tx: string | null;
+type ScanMode = "url" | "message" | "verify";
+
+interface RecentScan {
+  id: string;
+  result: ThreatAnalysisResponse;
+  scannedAt: Date;
 }
 
-interface VerificationResponse {
-  report_sha256: string;
-  is_verified: boolean;
-  on_chain_tx: string | null;
-  audit_data: Record<string, any> | null;
+const riskStyles: Record<string, { label: string; badge: string; dot: string }> = {
+  "low risk": {
+    label: "Safe",
+    badge: "bg-emerald-50 text-emerald-700 ring-emerald-200",
+    dot: "bg-emerald-500",
+  },
+  suspicious: {
+    label: "Suspicious",
+    badge: "bg-amber-50 text-amber-700 ring-amber-200",
+    dot: "bg-amber-500",
+  },
+  "high risk": {
+    label: "Malicious",
+    badge: "bg-rose-50 text-rose-700 ring-rose-200",
+    dot: "bg-rose-500",
+  },
+  "confirmed malicious": {
+    label: "Malicious",
+    badge: "bg-rose-50 text-rose-700 ring-rose-200",
+    dot: "bg-rose-500",
+  },
+  inconclusive: {
+    label: "Inconclusive",
+    badge: "bg-slate-100 text-slate-600 ring-slate-200",
+    dot: "bg-slate-400",
+  },
+};
+
+function getRiskStyle(risk: string) {
+  return (
+    riskStyles[risk?.toLowerCase()] ?? {
+      label: risk || "Unknown",
+      badge: "bg-slate-100 text-slate-600 ring-slate-200",
+      dot: "bg-slate-400",
+    }
+  );
+}
+
+function getVerdict(risk: string) {
+  switch (risk?.toLowerCase()) {
+    case "low risk":
+      return {
+        title: "This link looks safe",
+        description:
+          "No significant threats were identified in this scan. Always check that the address belongs to the organization you expect.",
+        panel: "border-emerald-200 bg-emerald-50/70",
+        accent: "text-emerald-700",
+      };
+    case "suspicious":
+      return {
+        title: "Use caution with this link",
+        description:
+          "Some unusual signals were found. Avoid entering passwords or payment details until you verify the source.",
+        panel: "border-amber-200 bg-amber-50/80",
+        accent: "text-amber-700",
+      };
+    default:
+      return {
+        title: "This may be a threat",
+        description:
+          "The scan found signals associated with phishing or fraud. Do not open the link or share personal information.",
+        panel: "border-rose-200 bg-rose-50/80",
+        accent: "text-rose-700",
+      };
+  }
+}
+
+function displayTime(date: Date) {
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
 }
 
 export default function ThreatDashboard() {
-  const [activeTab, setActiveTab] = useState<"url" | "message" | "ledger">("url");
+  const [activeTab, setActiveTab] = useState<ScanMode>("url");
   const [urlInput, setUrlInput] = useState("");
   const [messageInput, setMessageInput] = useState("");
   const [hashInput, setHashInput] = useState("");
-  
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [analysisResult, setAnalysisResult] = useState<ThreatResponse | null>(null);
-  const [verifyResult, setVerifyResult] = useState<VerificationResponse | null>(null);
-  const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [analysisResult, setAnalysisResult] =
+    useState<ThreatAnalysisResponse | null>(null);
+  const [verifyResult, setVerifyResult] = useState<VerificationResponse | null>(
+    null
+  );
+  const [recentScans, setRecentScans] = useState<RecentScan[]>([]);
   const [showTechnicalDetails, setShowTechnicalDetails] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [copiedField, setCopiedField] = useState<string | null>(null);
+  const historyRef = useRef<HTMLElement>(null);
 
-  const API_BASE = "http://127.0.0.1:8000/api/v1";
-
-  const handleCopy = (text: string, label: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedField(label);
-    setTimeout(() => setCopiedField(null), 2000);
-  };
-
-  const analyzeUrl = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!urlInput.trim()) return;
-    setLoading(true);
+  const clearResults = (mode: ScanMode) => {
+    setActiveTab(mode);
     setError(null);
     setAnalysisResult(null);
+    setVerifyResult(null);
+    setMobileNavOpen(false);
+  };
 
+  const handleCopy = async (text: string, label: string) => {
     try {
-      const trimmedUrl = urlInput.trim().replace(/^[\s@'"]+|[\s'"]+$/g, "");
-      const normalizedUrl = /^https?:\/\//i.test(trimmedUrl)
-        ? trimmedUrl
-        : `https://${trimmedUrl}`;
-      const res = await fetch(`${API_BASE}/analyze/url`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: normalizedUrl }),
-      });
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        if (res.status === 400) {
-          throw new Error("Please enter a valid website address, such as example.com.");
-        }
-        throw new Error(errData.detail || `The scan could not be completed (server error ${res.status}).`);
-      }
-      const data: ThreatResponse = await res.json();
-      setAnalysisResult(data);
-    } catch (err: any) {
-      setError(
-        err instanceof TypeError
-          ? "We couldn't connect to the scanner. Please check that the backend is running and try again."
-          : err.message || "We couldn't analyze that website address. Please check it and try again."
-      );
-    } finally {
-      setLoading(false);
+      await navigator.clipboard.writeText(text);
+      setCopiedField(label);
+      window.setTimeout(() => setCopiedField(null), 2000);
+    } catch {
+      setError("Clipboard access is unavailable in this browser.");
     }
   };
 
-  const analyzeMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!messageInput.trim()) return;
+  const saveScan = (result: ThreatAnalysisResponse) => {
+    setAnalysisResult(result);
+    setVerifyResult(null);
+    setRecentScans((scans) => [
+      {
+        id: `${result.report_sha256}-${Date.now()}`,
+        result,
+        scannedAt: new Date(),
+      },
+      ...scans,
+    ]);
+  };
+
+  const runUrlScan = async (inputUrl: string) => {
+    const rawUrl = inputUrl.trim().replace(/^[\s@'"]+|[\s'"]+$/g, "");
+    if (!rawUrl) return;
+
+    const normalizedUrl = /^https?:\/\//i.test(rawUrl)
+      ? rawUrl
+      : `https://${rawUrl}`;
+    setUrlInput(normalizedUrl);
     setLoading(true);
     setError(null);
     setAnalysisResult(null);
-
-    try {
-      const cleanedMessage = messageInput
-        .replace(/\r\n?/g, "\n")
-        .replace(/[\u0000\u200B\uFEFF]/g, "")
-        .trim();
-      const res = await fetch(`${API_BASE}/analyze/message`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: cleanedMessage, context: "SMS/Email Scam" }),
-      });
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.detail || `Message analysis could not be completed (server error ${res.status}).`);
-      }
-      const data: ThreatResponse = await res.json();
-      setAnalysisResult(data);
-    } catch (err: any) {
-      setError(
-        err instanceof TypeError
-          ? "We couldn't connect to the scanner. Please check that the backend is running and try again."
-          : err.message || "We couldn't analyze that message. Please try again."
-      );
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const verifyHash = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!hashInput.trim()) return;
-    setLoading(true);
-    setError(null);
     setVerifyResult(null);
 
     try {
-      const res = await fetch(`${API_BASE}/verify/hash/${hashInput.trim()}`);
-      if (!res.ok) {
-        throw new Error(`Verification lookup returned status ${res.status}`);
-      }
-      const data: VerificationResponse = await res.json();
-      setVerifyResult(data);
-    } catch (err: any) {
-      setError(err.message || "Ledger verification lookup failed");
+      saveScan(await analyzeUrl(normalizedUrl));
+    } catch (scanError) {
+      setError(
+        scanError instanceof TypeError
+          ? "We couldn't connect to the scanner. Please check that the backend is running."
+          : scanError instanceof Error
+            ? scanError.message
+            : "We couldn't analyze that website address. Please try again."
+      );
     } finally {
       setLoading(false);
     }
   };
 
-  // Plain-English translations of raw technical indicators
-  const translateIndicator = (ind: string) => {
-    const lower = ind.toLowerCase();
-    if (lower.includes("strict-transport-security") || lower.includes("defensive headers")) {
-      return {
-        title: "Standard Security Configuration",
-        desc: "The website uses basic HTTPS encryption, but hasn't activated strict browser security rules. Safe to browse, but avoid submitting passwords or payment details on public Wi-Fi."
-      };
-    }
-    if (lower.includes("typosquatting") || lower.includes("brand impersonation")) {
-      return {
-        title: "Impersonation / Fake Domain Detected",
-        desc: "This address looks almost identical to a well-known brand or bank, but is owned by someone else. Scammers use this trick to steal credentials."
-      };
-    }
-    if (lower.includes("homoglyph") || lower.includes("punycode")) {
-      return {
-        title: "Deceptive Letter Swapping",
-        desc: "This website uses lookalike foreign characters (e.g., Cyrillic 'a' instead of Latin 'a') to fool your eyes into thinking it's genuine."
-      };
-    }
-    if (lower.includes("urgency") || lower.includes("psychological coercion")) {
-      return {
-        title: "High Urgency Pressure Tactic",
-        desc: "The message is deliberately trying to panic you into taking immediate action (like threatening account suspension or legal action)."
-      };
-    }
-    if (lower.includes("manipulative social engineering")) {
-      return {
-        title: "Phishing / Social Engineering Patterns",
-        desc: "Language style matches standard fraudulent templates trying to extract personal information or money."
-      };
-    }
-    if (lower.includes("contains external link")) {
-      return {
-        title: "External Link Redirect",
-        desc: "This message contains an untrusted link leading outside official company apps."
-      };
-    }
-    if (lower.includes("entropy") || lower.includes("dga")) {
-      return {
-        title: "Computer-Generated Random Name",
-        desc: "The web address looks like a chaotic string of characters, common in disposable malware and temporary scam domains."
-      };
-    }
-    return {
-      title: ind,
-      desc: "Suspicious security pattern detected by the automated analysis engine."
-    };
+  const handleCheckUrl = (event: React.FormEvent) => {
+    event.preventDefault();
+    void runUrlScan(urlInput);
   };
 
-  // Plain-English verdict summary
-  const getSimpleVerdict = (risk: string) => {
-    switch (risk?.toLowerCase()) {
-      case "low risk":
-        return {
-          title: "Good to Go: Safe to Browse",
-          color: "text-emerald-400",
-          bgColor: "bg-emerald-950/60 border-emerald-500/40",
-          badgeColor: "bg-emerald-500 text-black",
-          summary: "This website has a verified security certificate, official hostname identity, and no known malicious activities on record."
-        };
-      case "suspicious":
-        return {
-          title: "Caution Advised: Unverified Elements Found",
-          color: "text-amber-400",
-          bgColor: "bg-amber-950/60 border-amber-500/40",
-          badgeColor: "bg-amber-500 text-black",
-          summary: "This site isn't confirmed as malware, but it exhibits unusual setups (e.g., suspicious domain structure, newly registered issuer, or missing security headers). Proceed with caution."
-        };
-      case "high risk":
-      case "confirmed malicious":
-        return {
-          title: "Danger: High Risk of Phishing or Fraud",
-          color: "text-rose-400",
-          bgColor: "bg-rose-950/60 border-rose-500/40",
-          badgeColor: "bg-rose-500 text-white font-bold",
-          summary: "Do not open this link or reply to this message. Strong evidence of brand impersonation, urgent coercion, or known scam activity detected."
-        };
-      default:
-        return {
-          title: "Analysis Complete",
-          color: "text-cyan-400",
-          bgColor: "bg-zinc-900 border-zinc-700",
-          badgeColor: "bg-zinc-700 text-white",
-          summary: "Assessment complete. See details below."
-        };
+  const switchTabAndFocus = (tab: ScanMode, inputId: string) => {
+    clearResults(tab);
+    window.setTimeout(() => document.getElementById(inputId)?.focus(), 0);
+  };
+
+  const handleCheckMessage = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const cleanedMessage = messageInput
+      .replace(/\r\n?/g, "\n")
+      .replace(/[\u0000\u200B\uFEFF]/g, "")
+      .trim();
+    if (!cleanedMessage) return;
+
+    setLoading(true);
+    setError(null);
+    setAnalysisResult(null);
+    setVerifyResult(null);
+    try {
+      saveScan(await analyzeMessage(cleanedMessage, "SMS/Email Scam"));
+    } catch (scanError) {
+      setError(
+        scanError instanceof TypeError
+          ? "We couldn't connect to the scanner. Please check that the backend is running."
+          : scanError instanceof Error
+            ? scanError.message
+            : "We couldn't analyze that message. Please try again."
+      );
+    } finally {
+      setLoading(false);
     }
   };
+
+  const handleVerifyHash = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const hash = hashInput.trim();
+    if (!hash) return;
+
+    setLoading(true);
+    setError(null);
+    setVerifyResult(null);
+    setAnalysisResult(null);
+    try {
+      setVerifyResult(await verifyHash(hash));
+    } catch (verifyError) {
+      setError(
+        verifyError instanceof TypeError
+          ? "We couldn't connect to the scanner. Please check that the backend is running."
+          : verifyError instanceof Error
+            ? verifyError.message
+            : "Ledger verification lookup failed. Please try again."
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const pasteFromClipboard = async () => {
+    try {
+      const clipboardText = await navigator.clipboard.readText();
+      if (activeTab === "message") {
+        setMessageInput(clipboardText);
+      } else if (activeTab === "verify") {
+        setHashInput(clipboardText.trim());
+      } else {
+        setUrlInput(clipboardText);
+      }
+      setError(null);
+    } catch {
+      setError("Clipboard access is unavailable. Please paste the copied text into the field.");
+    }
+  };
+
+  const navItems: { label: string; icon: string; action: () => void }[] = [
+    { label: "Home", icon: "⌂", action: () => clearResults("url") },
+    {
+      label: "Scan History",
+      icon: "◷",
+      action: () => {
+        clearResults("url");
+        window.setTimeout(
+          () => historyRef.current?.scrollIntoView({ behavior: "smooth" }),
+          0
+        );
+      },
+    },
+    {
+      label: "Message Scam AI",
+      icon: "✉",
+      action: () => clearResults("message"),
+    },
+    {
+      label: "Verify Blockchain Record",
+      icon: "⛓",
+      action: () => clearResults("verify"),
+    },
+  ];
+
+  const activeResult = analysisResult;
+  const verdict = activeResult ? getVerdict(activeResult.risk_level) : null;
+  const confidence = activeResult
+    ? Math.round(
+        activeResult.confidence_score <= 1
+          ? activeResult.confidence_score * 100
+          : activeResult.confidence_score
+      )
+    : 0;
+  const evidence = activeResult?.technical_evidence ?? {};
+  const campaignBrand =
+    evidence.url_structure?.matched_brand || evidence.impersonated_brand;
+  const validCampaignBrand =
+    typeof campaignBrand === "string" &&
+    ![
+      "",
+      "unknown",
+      "unspecified",
+      "financial / institutional entity",
+    ].includes(campaignBrand.trim().toLowerCase());
 
   return (
-    <div className="min-h-screen bg-black text-zinc-100 font-sans selection:bg-cyan-500 selection:text-black">
-      {/* Header */}
-      <header className="border-b border-zinc-800 bg-zinc-950/80 backdrop-blur sticky top-0 z-50">
-        <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center space-x-3">
-            <div className="w-8 h-8 rounded-lg bg-cyan-500 flex items-center justify-center font-black text-black text-sm">
-              AI
-            </div>
-            <div>
-              <h1 className="text-base font-bold tracking-tight text-white flex items-center gap-2">
-                HackMatrix26 <span className="text-zinc-500 text-xs font-normal">| Cyber Threat Scanner & Verifier</span>
-              </h1>
-            </div>
-          </div>
-          <div className="flex items-center space-x-2 text-xs">
-            <span className="flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
-            <span className="text-zinc-400 font-mono">ENGINE ONLINE</span>
-          </div>
-        </div>
-      </header>
+    <div className="min-h-screen bg-[#F4F7FC] font-sans text-slate-800">
+      {mobileNavOpen && (
+        <div
+          aria-hidden="true"
+          className="fixed inset-0 z-30 bg-slate-950/30 lg:hidden"
+          onClick={() => setMobileNavOpen(false)}
+        />
+      )}
 
-      <main className="max-w-6xl mx-auto px-4 py-8">
-        {/* Navigation Tabs */}
-        <div className="flex border-b border-zinc-800 space-x-2 mb-8">
-          <button
-            onClick={() => { setActiveTab("url"); setError(null); }}
-            className={`pb-3 px-4 text-sm font-semibold transition border-b-2 ${
-              activeTab === "url"
-                ? "border-cyan-500 text-cyan-400"
-                : "border-transparent text-zinc-400 hover:text-zinc-200"
-            }`}
+      <aside
+        className={`fixed inset-y-0 left-0 z-40 flex w-[270px] flex-col border-r border-slate-200/80 bg-white px-5 py-6 shadow-sm transition-transform lg:translate-x-0 ${
+          mobileNavOpen ? "translate-x-0" : "-translate-x-full"
+        }`}
+      >
+        <div className="flex items-center justify-between">
+          <a
+            href="#home"
+            className="flex items-center gap-3 px-2"
+            onClick={() => clearResults("url")}
           >
-            Check a Website Link
-          </button>
+            <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-600 text-lg font-black text-white shadow-md shadow-blue-600/20">
+              TG
+            </span>
+            <span>
+              <span className="block text-lg font-bold tracking-tight text-slate-900">
+                TrustGuard
+              </span>
+              <span className="block text-xs text-slate-500">
+                Browse Safe. Stay Secure.
+              </span>
+            </span>
+          </a>
           <button
-            onClick={() => { setActiveTab("message"); setError(null); }}
-            className={`pb-3 px-4 text-sm font-semibold transition border-b-2 ${
-              activeTab === "message"
-                ? "border-cyan-500 text-cyan-400"
-                : "border-transparent text-zinc-400 hover:text-zinc-200"
-            }`}
+            aria-label="Close navigation"
+            onClick={() => setMobileNavOpen(false)}
+            className="flex h-9 w-9 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 lg:hidden"
           >
-            Check a Suspicious Message / SMS
-          </button>
-          <button
-            onClick={() => { setActiveTab("ledger"); setError(null); }}
-            className={`pb-3 px-4 text-sm font-semibold transition border-b-2 ${
-              activeTab === "ledger"
-                ? "border-cyan-500 text-cyan-400"
-                : "border-transparent text-zinc-400 hover:text-zinc-200"
-            }`}
-          >
-            Verify Blockchain Security Record
+            ×
           </button>
         </div>
 
-        {/* Tab 1: URL Scanner */}
-        {activeTab === "url" && (
-          <div className="space-y-6">
-            <form onSubmit={analyzeUrl} className="bg-zinc-950 border border-zinc-800 rounded-xl p-5 shadow-2xl">
-              <label className="block text-sm font-semibold text-zinc-200 mb-1">
-                Enter any website address or link to check if it's safe:
-              </label>
-              <p className="text-xs text-zinc-500 mb-3">
-                Checks for fake lookalike websites, invalid certificates, known malware links, and security vulnerabilities.
-              </p>
-              <div className="flex flex-col sm:flex-row gap-3">
-                <input
-                  type="text"
-                  value={urlInput}
-                  onChange={(e) => setUrlInput(e.target.value)}
-                  placeholder="e.g., https://github.com or http://sbi-netbanking-verifykyc.top"
-                  className="flex-1 bg-zinc-900 border border-zinc-700 rounded-lg px-4 py-3 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-cyan-500"
-                  required
-                />
+        <div className="mt-10">
+          <p className="px-3 text-[11px] font-bold uppercase tracking-[0.16em] text-slate-400">
+            Workspace
+          </p>
+          <nav className="mt-3 space-y-1.5" aria-label="Main navigation">
+            {navItems.map((item, index) => {
+              const active =
+                (index === 0 && activeTab === "url" && !analysisResult) ||
+                (index === 2 && activeTab === "message") ||
+                (index === 3 && activeTab === "verify");
+              return (
                 <button
-                  type="submit"
-                  disabled={loading}
-                  className="bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-black font-semibold text-sm px-6 py-3 rounded-lg transition"
+                  key={item.label}
+                  onClick={item.action}
+                  className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-medium transition ${
+                    active
+                      ? "bg-blue-50 text-blue-700"
+                      : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+                  }`}
                 >
-                  {loading ? "Checking Safety..." : "Check Website"}
-                </button>
-              </div>
-            </form>
-          </div>
-        )}
-
-        {/* Tab 2: Message Scanner */}
-        {activeTab === "message" && (
-          <div className="space-y-6">
-            <form onSubmit={analyzeMessage} className="bg-zinc-950 border border-zinc-800 rounded-xl p-5 shadow-2xl">
-              <label className="block text-sm font-semibold text-zinc-200 mb-1">
-                Paste suspicious SMS, WhatsApp message, or email here:
-              </label>
-              <p className="text-xs text-zinc-500 mb-3">
-                Identifies psychological pressure tactics, fake bank notices, and hidden malicious links.
-              </p>
-              <textarea
-                value={messageInput}
-                onChange={(e) => setMessageInput(e.target.value)}
-                placeholder="Paste the message text here (e.g., 'URGENT: Your SBI account is blocked. Update KYC immediately at...')"
-                rows={4}
-                className="w-full bg-zinc-900 border border-zinc-700 rounded-lg p-3 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-cyan-500"
-                required
-              />
-              <div className="mt-3 flex justify-end">
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-black font-semibold text-sm px-6 py-3 rounded-lg transition"
-                >
-                  {loading ? "Analyzing Intent..." : "Scan for Scam Tactics"}
-                </button>
-              </div>
-            </form>
-          </div>
-        )}
-
-        {/* Tab 3: Ledger Verification */}
-        {activeTab === "ledger" && (
-          <div className="space-y-6">
-            <form onSubmit={verifyHash} className="bg-zinc-950 border border-zinc-800 rounded-xl p-5 shadow-2xl">
-              <label className="block text-sm font-semibold text-zinc-200 mb-1">
-                Verify an Official Security Audit Record:
-              </label>
-              <p className="text-xs text-zinc-500 mb-3">
-                Paste any Report SHA-256 Hash to verify that the scan result was permanently recorded on-chain and has not been tampered with.
-              </p>
-              <div className="flex flex-col sm:flex-row gap-3">
-                <input
-                  type="text"
-                  value={hashInput}
-                  onChange={(e) => setHashInput(e.target.value)}
-                  placeholder="Paste Report Hash (e.g. 7259adf7eceec841c2e5...)"
-                  className="flex-1 bg-zinc-900 border border-zinc-700 rounded-lg px-4 py-3 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-cyan-500 font-mono"
-                  required
-                />
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-black font-semibold text-sm px-6 py-3 rounded-lg transition"
-                >
-                  {loading ? "Verifying..." : "Verify Record"}
-                </button>
-              </div>
-            </form>
-
-            {verifyResult && (
-              <div className="bg-zinc-950 border border-zinc-800 rounded-2xl p-6 space-y-6 shadow-2xl">
-                {/* Header status */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-zinc-800 pb-4">
-                  <div>
-                    <span className="text-xs font-semibold tracking-wider uppercase text-zinc-400 block mb-1">
-                      Official Security Certificate
-                    </span>
-                    <h3 className="text-base font-bold text-white">
-                      Scan Integrity Verified
-                    </h3>
-                  </div>
-                  <span className={`px-4 py-1.5 rounded-full text-xs font-extrabold uppercase tracking-wide border self-start sm:self-auto ${
-                    verifyResult.is_verified 
-                      ? "bg-emerald-950/80 border-emerald-500/50 text-emerald-400" 
-                      : "bg-rose-950/80 border-rose-500/50 text-rose-400"
-                  }`}>
-                    {verifyResult.is_verified ? "✓ Authentic & Tamper-Proof" : "✗ Record Not Found"}
+                  <span
+                    className={`flex h-7 w-7 items-center justify-center rounded-lg text-base ${
+                      active ? "bg-white text-blue-600 shadow-sm" : "text-slate-400"
+                    }`}
+                  >
+                    {item.icon}
                   </span>
-                </div>
+                  {item.label}
+                  {index === 1 && recentScans.length > 0 && (
+                    <span className="ml-auto rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-500">
+                      {recentScans.length}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </nav>
+        </div>
 
-                {verifyResult.is_verified && verifyResult.audit_data ? (
-                  <div className="space-y-4">
-                    {/* What this means in plain words */}
-                    <div className="p-4 rounded-xl bg-emerald-950/20 border border-emerald-900/40 text-xs text-emerald-300 leading-relaxed">
-                      ✓ <strong>Original Scan Confirmed:</strong> This report was logged when the website was scanned. The results below match the permanent public record and have not been altered.
-                    </div>
+        <div className="mt-auto rounded-2xl border border-emerald-100 bg-emerald-50/80 p-4">
+          <div className="flex items-center gap-2 text-xs font-semibold text-emerald-800">
+            <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-500" />
+            ⚡ Powered by AI Intelligence
+          </div>
+          <p className="mt-1.5 pl-4 text-[11px] text-emerald-700">
+            Scanner services are online
+          </p>
+        </div>
+        <p className="mt-4 px-2 text-[11px] text-slate-400">
+          HackMatrix26 · Threat Intelligence
+        </p>
+      </aside>
 
-                    {/* Clean Human-Readable Summary Cards */}
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                      <div className="bg-zinc-900/70 p-4 rounded-xl border border-zinc-800">
-                        <span className="text-xs text-zinc-400 block mb-1">Website Scanned</span>
-                        <span className="text-sm font-semibold text-white break-all">
-                          {verifyResult.audit_data.target || "N/A"}
-                        </span>
-                      </div>
+      <div className="min-h-screen lg:pl-[270px]">
+        <header className="sticky top-0 z-20 border-b border-slate-200/80 bg-[#F4F7FC]/90 backdrop-blur">
+          <div className="mx-auto flex h-[68px] max-w-[1440px] items-center justify-between px-4 sm:px-7 lg:px-10">
+            <button
+              aria-label="Open navigation"
+              onClick={() => setMobileNavOpen(true)}
+              className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 lg:hidden"
+            >
+              ☰
+            </button>
+            <div className="hidden items-center gap-2 text-xs font-medium text-slate-500 sm:flex">
+              <span className="h-2 w-2 rounded-full bg-emerald-500" />
+              Threat intelligence active
+            </div>
+            <div className="ml-auto flex items-center gap-3">
+              <span className="hidden rounded-full border border-blue-100 bg-white px-3 py-1.5 text-xs font-semibold text-blue-700 sm:inline-flex">
+                ✦ AI-Powered Threat Detection
+              </span>
+              <span className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-100 text-sm font-bold text-blue-700">
+                TG
+              </span>
+            </div>
+          </div>
+        </header>
 
-                      <div className="bg-zinc-900/70 p-4 rounded-xl border border-zinc-800">
-                        <span className="text-xs text-zinc-400 block mb-1">Official Verdict</span>
-                        <span className="text-sm font-bold text-emerald-400">
-                          {verifyResult.audit_data.risk_level || "Unknown"}
-                        </span>
-                      </div>
+        <main
+          id="home"
+          className="mx-auto max-w-[1440px] px-4 pb-14 pt-8 sm:px-7 lg:px-10 lg:pt-10"
+        >
+          <section className="mb-8">
+            <p className="inline-flex items-center gap-2 rounded-full border border-blue-100 bg-white px-3.5 py-1.5 text-xs font-semibold text-blue-700 shadow-sm">
+              <span className="text-blue-500">✦</span> AI-Powered Threat Detection
+            </p>
+            <div className="mt-5 flex flex-col justify-between gap-4 md:flex-row md:items-end">
+              <div>
+                <h1 className="max-w-3xl text-3xl font-extrabold tracking-tight text-slate-900 sm:text-4xl lg:text-[42px]">
+                  Detect Threats, Stay Safe Online
+                </h1>
+                <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-500 sm:text-base">
+                  Check suspicious links and messages with AI-powered threat
+                  intelligence, then verify every report with a cryptographic
+                  receipt.
+                </p>
+              </div>
+              <div className="hidden items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs text-slate-500 shadow-sm md:flex">
+                <span className="text-base">🛡️</span>
+                Private, fast, and easy to use
+              </div>
+            </div>
+          </section>
 
-                      <div className="bg-zinc-900/70 p-4 rounded-xl border border-zinc-800">
-                        <span className="text-xs text-zinc-400 block mb-1">Safety Rating</span>
-                        <span className="text-sm font-bold text-white">
-                          {Math.round(
-                            (verifyResult.audit_data.confidence || 0) <= 1
-                              ? (verifyResult.audit_data.confidence || 0) * 100
-                              : verifyResult.audit_data.confidence
-                          )}%
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Proof Keys in neat compact bars */}
-                    <div className="space-y-2 pt-2">
-                      <div className="bg-zinc-900/40 p-3 rounded-lg border border-zinc-800 flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-xs font-mono">
-                        <span className="text-zinc-500">Public Receipt (Tx):</span>
-                        <span className="text-cyan-400 break-all">{verifyResult.on_chain_tx || "Confirmed"}</span>
-                      </div>
-                    </div>
-
-                    {/* Raw Developer JSON collapsed for judges only */}
-                    <details className="pt-2 text-xs text-zinc-500">
-                      <summary className="cursor-pointer hover:text-zinc-300 transition">
-                        View Raw Blockchain Ledger Data (Technical)
-                      </summary>
-                      <pre className="mt-2 bg-black p-4 rounded-xl text-xs font-mono text-zinc-400 overflow-x-auto border border-zinc-800">
-                        {JSON.stringify(verifyResult.audit_data, null, 2)}
-                      </pre>
-                    </details>
-                  </div>
-                ) : (
-                  <p className="text-xs text-zinc-400">
-                    No matching report found for this hash. The hash might be mistyped or the report has not yet been registered.
+          <section className="rounded-3xl border border-blue-50 bg-white p-4 shadow-md shadow-slate-200/50 sm:p-6 lg:p-7">
+            <div className="flex flex-col gap-5">
+              <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-center">
+                <div>
+                  <h2 className="text-lg font-bold text-slate-900">
+                    What would you like to check?
+                  </h2>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Choose a scan type to get started.
                   </p>
+                </div>
+                <div className="flex flex-wrap gap-1.5 rounded-2xl bg-slate-100 p-1.5">
+                  {(
+                    [
+                      ["url", "Check Website Link"],
+                      ["message", "Suspicious Message / SMS"],
+                      ["verify", "Verify Blockchain Record"],
+                    ] as const
+                  ).map(([mode, label]) => (
+                    <button
+                      key={mode}
+                      onClick={() => clearResults(mode)}
+                      className={`rounded-xl px-3 py-2 text-xs font-semibold transition sm:px-4 sm:text-sm ${
+                        activeTab === mode
+                          ? "bg-white text-blue-700 shadow-sm"
+                          : "text-slate-500 hover:text-slate-800"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {activeTab === "url" && (
+                <form onSubmit={handleCheckUrl}>
+                  <label htmlFor="url-input" className="sr-only">
+                    Website address to scan
+                  </label>
+                  <div className="flex flex-col gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-2 focus-within:border-blue-300 focus-within:ring-4 focus-within:ring-blue-50 sm:flex-row sm:items-center">
+                    <span className="hidden pl-3 text-xl text-slate-400 sm:inline">
+                      ⌕
+                    </span>
+                    <input
+                      id="url-input"
+                      value={urlInput}
+                      onChange={(event) => setUrlInput(event.target.value)}
+                      placeholder="Paste a website URL or enter a domain"
+                      className="min-w-0 flex-1 bg-transparent px-3 py-3 text-sm text-slate-800 outline-none placeholder:text-slate-400 sm:px-1"
+                      required
+                      type="text"
+                    />
+                    <button
+                      disabled={loading}
+                      className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-6 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-wait disabled:opacity-60"
+                    >
+                      {loading ? (
+                        <>
+                          <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                          Scanning…
+                        </>
+                      ) : (
+                        <>Scan Now <span aria-hidden="true">→</span></>
+                      )}
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {activeTab === "message" && (
+                <form onSubmit={handleCheckMessage}>
+                  <label htmlFor="message-input" className="mb-2 block text-sm font-medium text-slate-700">
+                    Paste the suspicious message
+                  </label>
+                  <textarea
+                    id="message-input"
+                    rows={4}
+                    value={messageInput}
+                    onChange={(event) => setMessageInput(event.target.value)}
+                    placeholder="Paste SMS, WhatsApp forwards, emails, or messages with suspicious links…"
+                    className="w-full resize-y rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-800 outline-none placeholder:text-slate-400 focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
+                    required
+                  />
+                  <div className="mt-3 flex justify-end">
+                    <button
+                      disabled={loading}
+                      className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:opacity-60"
+                    >
+                      {loading ? "Analyzing message…" : "Analyze Message →"}
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {activeTab === "verify" && (
+                <form onSubmit={handleVerifyHash}>
+                  <label htmlFor="verify-input" className="mb-2 block text-sm font-medium text-slate-700">
+                    Verify a SHA-256 security report
+                  </label>
+                  <div className="flex flex-col gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-2 sm:flex-row sm:items-center">
+                    <span className="hidden pl-3 text-lg text-slate-400 sm:inline">⛓</span>
+                    <input
+                      id="verify-input"
+                      value={hashInput}
+                      onChange={(event) => setHashInput(event.target.value)}
+                      placeholder="Paste report hash"
+                      className="min-w-0 flex-1 bg-transparent px-3 py-3 font-mono text-sm text-slate-800 outline-none placeholder:font-sans placeholder:text-slate-400 sm:px-1"
+                      required
+                    />
+                    <button
+                      disabled={loading}
+                      className="rounded-xl bg-blue-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:opacity-60"
+                    >
+                      {loading ? "Verifying…" : "Verify Record →"}
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="mr-1 text-xs font-medium text-slate-400">
+                  Quick actions
+                </span>
+                <button
+                  type="button"
+                  onClick={pasteFromClipboard}
+                  className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:border-blue-200 hover:text-blue-700"
+                >
+                  ⎘ Paste from Clipboard
+                </button>
+                {activeTab === "url" && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => void runUrlScan("https://adamasuniversity.ac.in")}
+                      className="rounded-full border border-emerald-100 bg-emerald-50/70 px-3 py-1.5 text-xs font-medium text-emerald-700 transition hover:bg-emerald-100"
+                    >
+                      Test Benign (Adamas)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void runUrlScan("http://sbi-kyc-reactivate.top")}
+                      className="rounded-full border border-rose-100 bg-rose-50/70 px-3 py-1.5 text-xs font-medium text-rose-700 transition hover:bg-rose-100"
+                    >
+                      Test Phishing (SBI Scam)
+                    </button>
+                  </>
                 )}
               </div>
-            )}
-          </div>
-        )}
 
-        {/* Global Error Notice */}
-        {error && (
-          <div className="mt-6 p-4 bg-rose-950/60 border border-rose-800/80 rounded-xl text-rose-300 text-sm">
-            {error}
-          </div>
-        )}
+              {error && (
+                <div
+                  role="alert"
+                  className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700"
+                >
+                  {error}
+                </div>
+              )}
+            </div>
+          </section>
 
-        {/* Analysis Result Display */}
-        {analysisResult && (() => {
-          const verdict = getSimpleVerdict(analysisResult.risk_level);
-          const confidencePct = Math.round(
-            analysisResult.confidence_score <= 1 
-              ? analysisResult.confidence_score * 100 
-              : analysisResult.confidence_score
-          );
-
-          return (
-            <div className="mt-8 space-y-6">
-              {/* Card 1: Clear Human Verdict Banner */}
-              <div className={`border rounded-2xl p-6 shadow-2xl ${verdict.bgColor}`}>
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-zinc-800/60 pb-4">
-                  <div>
-                    <span className="text-xs font-semibold tracking-wider uppercase text-zinc-400 block mb-1">
-                      Scanned Target
-                    </span>
-                    <h2 className="text-base font-semibold text-white break-all">
-                      {analysisResult.target}
+          {activeResult && verdict && (
+            <section className="mt-8 space-y-5" aria-live="polite">
+              <div className={`rounded-3xl border p-5 shadow-sm sm:p-7 ${verdict.panel}`}>
+                {activeResult.campaign_correlation?.is_campaign && (
+                  <div className="mb-6 rounded-2xl border border-amber-300 bg-gradient-to-r from-amber-50 via-rose-50 to-white p-4 shadow-sm sm:p-5">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <h2 className="flex items-center gap-2 font-bold text-rose-800">
+                        <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-rose-500" />
+                        🚨 Large Scam Ring Detected
+                      </h2>
+                      {activeResult.campaign_correlation.campaign_id && (
+                        <span className="rounded-full border border-amber-300 bg-white px-3 py-1.5 font-mono text-xs font-bold text-amber-800 shadow-sm">
+                          Campaign ID: {activeResult.campaign_correlation.campaign_id}
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-2 text-sm leading-6 text-slate-700">
+                      We have linked this link to an active wave targeting{" "}
+                      {validCampaignBrand ? campaignBrand : "this organization"}.{" "}
+                      <span className="inline-flex rounded-full border border-rose-200 bg-rose-100 px-2.5 py-0.5 font-bold tabular-nums text-rose-800">
+                        {activeResult.campaign_correlation.related_reports_count}
+                      </span>{" "}
+                      people have recently flagged identical attacks.
+                    </p>
+                  </div>
+                )}
+                <div className="flex flex-col justify-between gap-5 sm:flex-row sm:items-start">
+                  <div className="min-w-0">
+                    <p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-500">
+                      Scan result
+                    </p>
+                    <h2 className={`mt-2 text-2xl font-bold ${verdict.accent}`}>
+                      {verdict.title}
                     </h2>
+                    <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
+                      {activeResult.summary || verdict.description}
+                    </p>
+                    <p className="mt-4 break-all rounded-xl border border-white/80 bg-white/70 px-3 py-2 font-mono text-xs text-slate-600">
+                      {activeResult.target}
+                    </p>
                   </div>
-                  <div className="flex items-center gap-3">
-                    <div className="text-right">
-                      <span className="text-xs text-zinc-400 block">Assessment Score</span>
-                      <span className="text-base font-bold text-white">{confidencePct}%</span>
+                  <div className="flex shrink-0 items-center gap-3">
+                    <div className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-center shadow-sm">
+                      <p className="text-[11px] font-medium text-slate-500">Confidence</p>
+                      <p className="mt-1 text-xl font-bold text-slate-900">{confidence}%</p>
                     </div>
-                    <span className={`px-4 py-2 rounded-xl text-xs font-extrabold uppercase tracking-wide ${verdict.badgeColor}`}>
-                      {analysisResult.risk_level}
+                    <span className={`rounded-full px-3 py-2 text-xs font-bold ring-1 ring-inset ${getRiskStyle(activeResult.risk_level).badge}`}>
+                      {getRiskStyle(activeResult.risk_level).label}
                     </span>
                   </div>
                 </div>
-
-                <div className="mt-4">
-                  <h3 className={`text-xl font-bold mb-1 ${verdict.color}`}>
-                    {verdict.title}
-                  </h3>
-                  <p className="text-zinc-200 text-sm leading-relaxed">
-                    {verdict.summary}
-                  </p>
-                </div>
               </div>
 
-              {/* Card 2: Plain English Findings & Practical Advice */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {analysisResult.campaign_correlation?.is_campaign && (
-                  (() => {
-                    const evidence = analysisResult.technical_evidence;
-                    const campaignBrand =
-                      evidence?.url_structure?.matched_brand ||
-                      evidence?.impersonated_brand;
-                    const normalizedBrand =
-                      typeof campaignBrand === "string" &&
-                      !["", "unknown", "unspecified", "financial / institutional entity"].includes(
-                        campaignBrand.trim().toLowerCase()
-                      )
-                        ? campaignBrand
-                        : "this organization";
-
-                    return (
-                      <div
-                        role="alert"
-                        className="md:col-span-2 rounded-2xl border border-amber-500/40 bg-gradient-to-r from-amber-950/40 via-red-950/30 to-zinc-950 p-5 text-amber-100 shadow-[0_0_30px_rgba(244,63,94,0.12)]"
-                      >
-                        <div className="flex flex-wrap items-center justify-between gap-3">
-                          <h3 className="flex items-center gap-2 text-base font-extrabold tracking-wide text-amber-100">
-                            <span
-                              aria-hidden="true"
-                              className="h-2.5 w-2.5 animate-pulse rounded-full bg-rose-400 shadow-[0_0_12px_rgba(251,113,133,0.9)]"
-                            />
-                            🚨 Large Scam Ring Detected
-                          </h3>
-                          {analysisResult.campaign_correlation.campaign_id && (
-                            <span className="rounded-full border border-amber-400/40 bg-amber-400/10 px-3 py-1 font-mono text-xs font-bold text-amber-200 shadow-[0_0_12px_rgba(251,191,36,0.12)]">
-                              Campaign ID: {analysisResult.campaign_correlation.campaign_id}
-                            </span>
-                          )}
-                        </div>
-                        <p className="mt-3 text-sm leading-relaxed text-zinc-200">
-                          We have linked this link to an active wave targeting {normalizedBrand}.{" "}
-                          <span className="mx-1 inline-flex rounded-full border border-rose-400/40 bg-rose-400/10 px-2.5 py-0.5 font-bold tabular-nums text-rose-200 shadow-[0_0_12px_rgba(251,113,133,0.15)]">
-                            {analysisResult.campaign_correlation.related_reports_count}
-                          </span>{" "}
-                          people have recently flagged identical attacks.
-                        </p>
-                      </div>
-                    );
-                  })()
-                )}
-                {/* Findings in Plain Language */}
-                <div className="bg-zinc-950 border border-zinc-800 rounded-2xl p-6">
-                  <h3 className="text-sm font-bold text-white mb-1 flex items-center gap-2">
-                    <span>🔍</span> What We Discovered
-                  </h3>
-                  <p className="text-xs text-zinc-400 mb-4">
-                    Key signals and behavior identified during the security scan:
-                  </p>
-
-                  {analysisResult.detected_indicators.length === 0 ? (
-                    <div className="p-4 rounded-xl bg-emerald-950/30 border border-emerald-900/50 text-xs text-emerald-300">
-                      ✓ No suspicious behavior or security vulnerabilities detected. Everything appears standard and legitimate.
+              <div className="grid gap-5 lg:grid-cols-2">
+                <div className="rounded-2xl border border-blue-100 bg-blue-50/50 p-5 sm:p-6">
+                  <div className="flex items-center gap-2">
+                    <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-blue-600 shadow-sm">⌕</span>
+                    <div>
+                      <h3 className="font-bold text-slate-900">What We Discovered</h3>
+                      <p className="text-xs text-slate-500">Signals from this scan</p>
                     </div>
+                  </div>
+                  {activeResult.detected_indicators.length === 0 ? (
+                    <p className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50/70 p-4 text-sm text-emerald-800">
+                      No suspicious indicators were detected in this scan.
+                    </p>
                   ) : (
-                    <div className="space-y-3">
-                      {analysisResult.detected_indicators.map((ind, idx) => {
-                        const t = translateIndicator(ind);
-                        return (
-                          <div key={idx} className="p-3.5 rounded-xl bg-zinc-900/80 border border-zinc-800">
-                            <div className="text-xs font-bold text-zinc-200 mb-1 flex items-center gap-2">
-                              <span className="text-amber-400 font-bold">•</span>
-                              <span>{t.title}</span>
-                            </div>
-                            <p className="text-xs text-zinc-400 leading-relaxed">
-                              {t.desc}
-                            </p>
-                          </div>
-                        );
-                      })}
-                    </div>
+                    <ul className="mt-4 space-y-2.5">
+                      {activeResult.detected_indicators.map((indicator, index) => (
+                        <li key={`${indicator}-${index}`} className="flex gap-2.5 rounded-xl border border-white bg-white/80 p-3 text-sm leading-5 text-slate-700">
+                          <span className="mt-0.5 text-blue-600">•</span>
+                          {indicator}
+                        </li>
+                      ))}
+                    </ul>
                   )}
                 </div>
 
-                {/* What should the user do? */}
-                <div className="bg-zinc-950 border border-zinc-800 rounded-2xl p-6">
-                  <h3 className="text-sm font-bold text-white mb-1 flex items-center gap-2">
-                    <span>🛡️</span> What You Should Do
-                  </h3>
-                  <p className="text-xs text-zinc-400 mb-4">
-                    Clear safety steps based on our findings:
-                  </p>
-
-                  <div className="space-y-3">
-                    {analysisResult.recommended_actions.map((act, idx) => (
-                      <div key={idx} className="p-3.5 rounded-xl bg-zinc-900/80 border border-zinc-800 flex items-start gap-3">
-                        <span className="text-cyan-400 font-bold text-sm mt-0.5">✓</span>
-                        <p className="text-xs text-zinc-200 leading-relaxed">
-                          {act}
-                        </p>
-                      </div>
-                    ))}
+                <div className="rounded-2xl border border-emerald-200 bg-emerald-50/50 p-5 sm:p-6">
+                  <div className="flex items-center gap-2">
+                    <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-emerald-600 shadow-sm">✓</span>
+                    <div>
+                      <h3 className="font-bold text-slate-900">What You Should Do</h3>
+                      <p className="text-xs text-slate-500">Recommended next steps</p>
+                    </div>
                   </div>
+                  <ul className="mt-4 space-y-2.5">
+                    {activeResult.recommended_actions.map((action, index) => (
+                      <li key={`${action}-${index}`} className="flex gap-2.5 rounded-xl border border-white bg-white/80 p-3 text-sm leading-5 text-slate-700">
+                        <span className="text-emerald-600">✓</span>
+                        {action}
+                      </li>
+                    ))}
+                  </ul>
                 </div>
               </div>
 
-              {/* Card 3: Blockchain Audit Verification (Simple Card + Copy) */}
-              <div className="bg-zinc-950 border border-zinc-800 rounded-2xl p-6">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
-                  <div>
-                    <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                      <span>⛓️</span> Tamper-Evident Security Receipt
-                    </h3>
-                    <p className="text-xs text-zinc-400">
-                      This diagnostic report is mathematically signed and recorded on an immutable ledger so it cannot be altered.
-                    </p>
+              <div className="overflow-hidden rounded-3xl border border-blue-100 bg-white shadow-sm">
+                <div className="border-b border-slate-100 bg-gradient-to-r from-blue-50/80 to-white px-5 py-5 sm:px-7">
+                  <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-600 text-white shadow-sm">⛓</span>
+                        <h3 className="font-bold text-slate-900">Cryptographic Verification Receipt</h3>
+                      </div>
+                      <p className="mt-2 text-xs leading-5 text-slate-500">
+                        This report is hashed and registered for tamper-evident verification.
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        setHashInput(activeResult.report_sha256);
+                        clearResults("verify");
+                      }}
+                      className="self-start rounded-xl border border-blue-200 bg-white px-4 py-2 text-xs font-semibold text-blue-700 transition hover:bg-blue-50 sm:self-auto"
+                    >
+                      Verify this report →
+                    </button>
                   </div>
-                  <button
-                    onClick={() => {
-                      setHashInput(analysisResult.report_sha256);
-                      setActiveTab("ledger");
-                    }}
-                    className="text-xs font-semibold text-cyan-400 hover:text-cyan-300 underline self-start sm:self-auto"
-                  >
-                    Verify in Registry Tab →
-                  </button>
                 </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="bg-zinc-900/60 p-3.5 rounded-xl border border-zinc-800">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-xs text-zinc-400">Report SHA-256 Hash</span>
+                <div className="grid gap-3 p-5 sm:grid-cols-2 sm:p-7">
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs font-semibold text-slate-500">Report SHA-256</p>
                       <button
-                        onClick={() => handleCopy(analysisResult.report_sha256, "sha")}
-                        className="text-xs text-cyan-400 hover:text-cyan-300"
+                        onClick={() => handleCopy(activeResult.report_sha256, "sha")}
+                        className="text-xs font-semibold text-blue-600 hover:text-blue-800"
                       >
-                        {copiedField === "sha" ? "Copied!" : "Copy"}
+                        {copiedField === "sha" ? "Copied" : "Copy"}
                       </button>
                     </div>
-                    <div className="font-mono text-xs text-zinc-300 break-all">
-                      {analysisResult.report_sha256}
-                    </div>
+                    <p className="mt-2 break-all font-mono text-xs leading-5 text-slate-700">
+                      {activeResult.report_sha256}
+                    </p>
                   </div>
-
-                  <div className="bg-zinc-900/60 p-3.5 rounded-xl border border-zinc-800">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-xs text-zinc-400">On-Chain Transaction Receipt</span>
-                      {analysisResult.on_chain_tx && (
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs font-semibold text-slate-500">Ledger transaction receipt</p>
+                      {activeResult.on_chain_tx && (
                         <button
-                          onClick={() => handleCopy(analysisResult.on_chain_tx!, "tx")}
-                          className="text-xs text-cyan-400 hover:text-cyan-300"
+                          onClick={() => handleCopy(activeResult.on_chain_tx!, "tx")}
+                          className="text-xs font-semibold text-blue-600 hover:text-blue-800"
                         >
-                          {copiedField === "tx" ? "Copied!" : "Copy"}
+                          {copiedField === "tx" ? "Copied" : "Copy"}
                         </button>
                       )}
                     </div>
-                    <div className="font-mono text-xs text-cyan-400 break-all">
-                      {analysisResult.on_chain_tx || "Pending Confirmation"}
-                    </div>
+                    <p className="mt-2 break-all font-mono text-xs leading-5 text-blue-700">
+                      {activeResult.on_chain_tx || "Receipt pending"}
+                    </p>
                   </div>
                 </div>
-
-                {/* Collapsible Technical Details (For Judges & Security Analysts) */}
-                <div className="mt-5 pt-4 border-t border-zinc-800">
-                  <button
-                    onClick={() => setShowTechnicalDetails(!showTechnicalDetails)}
-                    className="text-xs font-medium text-zinc-400 hover:text-zinc-200 flex items-center justify-between w-full"
-                  >
-                    <span>{showTechnicalDetails ? "▲ Hide Technical Evidence (JSON)" : "▼ Show Technical Evidence & Raw Data (For Judges & Security Experts)"}</span>
-                  </button>
-
-                  {showTechnicalDetails && (
-                    <pre className="mt-4 bg-black p-4 rounded-xl text-xs font-mono text-zinc-300 overflow-x-auto border border-zinc-800 max-h-96">
-                      {JSON.stringify(analysisResult.technical_evidence, null, 2)}
-                    </pre>
-                  )}
-                </div>
               </div>
-            </div>
-          );
-        })()}
-      </main>
+
+              <details
+                open={showTechnicalDetails}
+                onToggle={(event) =>
+                  setShowTechnicalDetails(event.currentTarget.open)
+                }
+                className="rounded-2xl border border-slate-200 bg-white shadow-sm"
+              >
+                <summary className="cursor-pointer list-none px-5 py-4 text-sm font-semibold text-slate-700 marker:hidden">
+                  <span className="flex items-center justify-between">
+                    Technical Inspector <span className="text-xs font-normal text-slate-400">For Judges · Raw JSON and HTTP evidence</span>
+                  </span>
+                </summary>
+                <pre className="max-h-[480px] overflow-auto border-t border-slate-100 bg-slate-950 p-4 text-xs leading-5 text-slate-100 sm:p-6">
+                  {JSON.stringify(
+                    {
+                      technical_evidence: activeResult.technical_evidence,
+                      detected_indicators: activeResult.detected_indicators,
+                      campaign_correlation: activeResult.campaign_correlation,
+                    },
+                    null,
+                    2
+                  )}
+                </pre>
+              </details>
+            </section>
+          )}
+
+          {verifyResult && (
+            <section className="mt-8 rounded-3xl border border-blue-100 bg-white p-5 shadow-sm sm:p-7">
+              <div className="flex flex-col justify-between gap-4 border-b border-slate-100 pb-5 sm:flex-row sm:items-center">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-[0.14em] text-slate-400">
+                    Blockchain record verification
+                  </p>
+                  <h2 className="mt-2 text-2xl font-bold text-slate-900">
+                    {verifyResult.is_verified
+                      ? "Report integrity verified"
+                      : "No matching report found"}
+                  </h2>
+                </div>
+                <span className={`w-fit rounded-full px-3 py-2 text-xs font-bold ring-1 ring-inset ${
+                  verifyResult.is_verified
+                    ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+                    : "bg-rose-50 text-rose-700 ring-rose-200"
+                }`}>
+                  {verifyResult.is_verified ? "✓ Authentic record" : "Not verified"}
+                </span>
+              </div>
+              {verifyResult.is_verified && verifyResult.audit_data ? (
+                <>
+                  <p className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50/70 p-4 text-sm leading-6 text-emerald-800">
+                    The report hash matches a record in the verification ledger.
+                  </p>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    <div className="rounded-2xl bg-slate-50 p-4">
+                      <p className="text-xs font-semibold text-slate-500">Scanned target</p>
+                      <p className="mt-2 break-all text-sm font-medium text-slate-800">
+                        {verifyResult.audit_data.target || "Not available"}
+                      </p>
+                    </div>
+                    <div className="rounded-2xl bg-slate-50 p-4">
+                      <p className="text-xs font-semibold text-slate-500">Risk level</p>
+                      <p className="mt-2 text-sm font-bold text-slate-800">
+                        {verifyResult.audit_data.risk_level || "Unknown"}
+                      </p>
+                    </div>
+                    <div className="rounded-2xl bg-slate-50 p-4 sm:col-span-2">
+                      <p className="text-xs font-semibold text-slate-500">Transaction receipt</p>
+                      <p className="mt-2 break-all font-mono text-xs leading-5 text-blue-700">
+                        {verifyResult.on_chain_tx || "Not available"}
+                      </p>
+                    </div>
+                  </div>
+                  <details className="mt-5 rounded-xl border border-slate-200">
+                    <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-600">
+                      Technical ledger data
+                    </summary>
+                    <pre className="max-h-96 overflow-auto rounded-b-xl bg-slate-950 p-4 text-xs text-slate-100">
+                      {JSON.stringify(verifyResult.audit_data, null, 2)}
+                    </pre>
+                  </details>
+                </>
+              ) : (
+                <p className="mt-5 text-sm text-slate-500">
+                  Check that the hash is correct or run a scan to create a report.
+                </p>
+              )}
+            </section>
+          )}
+
+          {!analysisResult && !verifyResult && (
+            <>
+              <section className="mt-8 grid gap-4 md:grid-cols-3">
+                <button
+                  type="button"
+                  onClick={() => switchTabAndFocus("url", "url-input")}
+                  className="rounded-2xl border border-emerald-100 bg-white p-5 text-left shadow-sm cursor-pointer transition-all duration-200 hover:-translate-y-1 hover:shadow-md hover:border-emerald-300"
+                >
+                  <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-50 text-xl text-emerald-700">⌕</span>
+                  <h3 className="mt-4 font-bold text-slate-900">Threat Detection</h3>
+                  <p className="mt-2 text-sm leading-6 text-slate-500">
+                    Identify malicious websites, harmful links, and deceptive domains.
+                  </p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => switchTabAndFocus("message", "message-input")}
+                  className="rounded-2xl border border-rose-100 bg-white p-5 text-left shadow-sm cursor-pointer transition-all duration-200 hover:-translate-y-1 hover:shadow-md hover:border-rose-300"
+                >
+                  <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-rose-50 text-xl text-rose-700">✉</span>
+                  <h3 className="mt-4 font-bold text-slate-900">Fraud Detection</h3>
+                  <p className="mt-2 text-sm leading-6 text-slate-500">
+                    Spot urgent SMS scams, phishing attempts, and fake payment requests.
+                  </p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => switchTabAndFocus("verify", "verify-input")}
+                  className="rounded-2xl border border-violet-100 bg-white p-5 text-left shadow-sm cursor-pointer transition-all duration-200 hover:-translate-y-1 hover:shadow-md hover:border-indigo-300"
+                >
+                  <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-violet-50 text-xl text-violet-700">⛓</span>
+                  <h3 className="mt-4 font-bold text-slate-900">Fake URL & Web3 Proof</h3>
+                  <p className="mt-2 text-sm leading-6 text-slate-500">
+                    Detect lookalike domains and verify scan integrity with an on-chain receipt.
+                  </p>
+                </button>
+              </section>
+
+              <section className="mt-8 grid gap-5 xl:grid-cols-[1.65fr_1fr]">
+                <article
+                  ref={historyRef}
+                  id="scan-history"
+                  className="rounded-3xl border border-blue-50 bg-white p-5 shadow-sm sm:p-6"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <h2 className="font-bold text-slate-900">Recent Scans</h2>
+                      <p className="mt-1 text-xs text-slate-500">Your scans in this session</p>
+                    </div>
+                    <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-500">
+                      {recentScans.length} total
+                    </span>
+                  </div>
+                  {recentScans.length === 0 ? (
+                    <div className="mt-5 rounded-2xl border border-dashed border-slate-200 bg-slate-50/70 px-4 py-8 text-center">
+                      <span className="text-2xl">🛡️</span>
+                      <p className="mt-2 text-sm font-medium text-slate-700">Your scan history will appear here</p>
+                      <p className="mt-1 text-xs text-slate-400">Run a website or message check to get started.</p>
+                    </div>
+                  ) : (
+                    <div className="mt-4 overflow-x-auto">
+                      <table className="w-full min-w-[560px] text-left text-sm">
+                        <thead>
+                          <tr className="border-b border-slate-100 text-[11px] uppercase tracking-wider text-slate-400">
+                            <th className="px-3 py-3 font-semibold">Target</th>
+                            <th className="px-3 py-3 font-semibold">Status</th>
+                            <th className="px-3 py-3 font-semibold">Scanned</th>
+                            <th className="px-3 py-3 text-right font-semibold">Report</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {recentScans.slice(0, 8).map((scan) => {
+                            const style = getRiskStyle(scan.result.risk_level);
+                            return (
+                              <tr key={scan.id} className="border-b border-slate-50 last:border-0">
+                                <td className="max-w-[240px] truncate px-3 py-3 font-medium text-slate-700">
+                                  {scan.result.target}
+                                </td>
+                                <td className="px-3 py-3">
+                                  <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold ring-1 ring-inset ${style.badge}`}>
+                                    <span className={`h-1.5 w-1.5 rounded-full ${style.dot}`} />
+                                    {style.label}
+                                  </span>
+                                </td>
+                                <td className="px-3 py-3 text-xs text-slate-500">
+                                  {displayTime(scan.scannedAt)}
+                                </td>
+                                <td className="px-3 py-3 text-right">
+                                  <button
+                                    onClick={() => {
+                                      setAnalysisResult(scan.result);
+                                      setVerifyResult(null);
+                                      setActiveTab(scan.result.target === "Pasted Message" ? "message" : "url");
+                                    }}
+                                    className="text-xs font-semibold text-blue-600 hover:text-blue-800"
+                                  >
+                                    View report
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </article>
+
+                <article className="relative overflow-hidden rounded-3xl border border-blue-100 bg-gradient-to-br from-blue-600 to-indigo-700 p-6 text-white shadow-md">
+                  <div className="absolute -right-8 -top-8 h-36 w-36 rounded-full border-[20px] border-white/10" />
+                  <div className="relative">
+                    <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white/15 text-xl">✦</span>
+                    <h2 className="mt-5 text-xl font-bold">Stay Alert, Stay Safe!</h2>
+                    <p className="mt-2 text-sm leading-6 text-blue-100">
+                      A few quick checks can help protect your accounts and identity.
+                    </p>
+                    <ul className="mt-5 space-y-3 text-sm leading-5 text-white/95">
+                      <li className="flex gap-2"><span>✓</span> Check the full sender address before you click.</li>
+                      <li className="flex gap-2"><span>✓</span> Never share passwords, PINs, or OTPs from a message link.</li>
+                      <li className="flex gap-2"><span>✓</span> Verify urgent requests through official channels.</li>
+                    </ul>
+                  </div>
+                </article>
+              </section>
+            </>
+          )}
+
+          <footer className="mt-10 flex flex-col justify-between gap-2 border-t border-slate-200 pt-5 text-xs text-slate-400 sm:flex-row">
+            <span>TrustGuard · HackMatrix26 Threat Intelligence</span>
+            <span>Scan carefully. Verify independently.</span>
+          </footer>
+        </main>
+      </div>
     </div>
   );
 }
