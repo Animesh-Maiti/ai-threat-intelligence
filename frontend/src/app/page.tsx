@@ -57,19 +57,30 @@ export default function ThreatDashboard() {
     setAnalysisResult(null);
 
     try {
+      const trimmedUrl = urlInput.trim().replace(/^[\s@'"]+|[\s'"]+$/g, "");
+      const normalizedUrl = /^https?:\/\//i.test(trimmedUrl)
+        ? trimmedUrl
+        : `https://${trimmedUrl}`;
       const res = await fetch(`${API_BASE}/analyze/url`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: urlInput.trim() }),
+        body: JSON.stringify({ url: normalizedUrl }),
       });
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.detail || `Server responded with ${res.status}`);
+        if (res.status === 400) {
+          throw new Error("Please enter a valid website address, such as example.com.");
+        }
+        throw new Error(errData.detail || `The scan could not be completed (server error ${res.status}).`);
       }
       const data: ThreatResponse = await res.json();
       setAnalysisResult(data);
     } catch (err: any) {
-      setError(err.message || "Failed to analyze target URL");
+      setError(
+        err instanceof TypeError
+          ? "We couldn't connect to the scanner. Please check that the backend is running and try again."
+          : err.message || "We couldn't analyze that website address. Please check it and try again."
+      );
     } finally {
       setLoading(false);
     }
@@ -83,19 +94,27 @@ export default function ThreatDashboard() {
     setAnalysisResult(null);
 
     try {
+      const cleanedMessage = messageInput
+        .replace(/\r\n?/g, "\n")
+        .replace(/[\u0000\u200B\uFEFF]/g, "")
+        .trim();
       const res = await fetch(`${API_BASE}/analyze/message`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: messageInput.trim(), context: "SMS/Email Scam" }),
+        body: JSON.stringify({ content: cleanedMessage, context: "SMS/Email Scam" }),
       });
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.detail || `Server responded with ${res.status}`);
+        throw new Error(errData.detail || `Message analysis could not be completed (server error ${res.status}).`);
       }
       const data: ThreatResponse = await res.json();
       setAnalysisResult(data);
     } catch (err: any) {
-      setError(err.message || "Failed to triage suspicious message");
+      setError(
+        err instanceof TypeError
+          ? "We couldn't connect to the scanner. Please check that the backend is running and try again."
+          : err.message || "We couldn't analyze that message. Please try again."
+      );
     } finally {
       setLoading(false);
     }

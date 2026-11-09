@@ -5,8 +5,11 @@ from app.modules.extended_auditor import (
 )
 from app.modules.web3_logger import record_threat_on_chain
 import hashlib
+import ipaddress
+import ssl
 import socket
 import time
+import urllib.error
 import urllib.parse
 from typing import Dict, Any, List, Optional
 import requests
@@ -20,19 +23,48 @@ from app.schemas.payloads import (
 )
 from app.core.security import validate_target_url
 from app.modules.tls_inspector import inspect_tls_certificate
-from app.modules.scam_analyzer import analyze_scam_with_ai
+from app.modules.scam_analyzer import analyze_scam_with_ai, sanitize_message_content
 from app.modules.header_auditor import audit_security_headers
 from app.modules.url_analyzer import analyze_url_structure, trace_redirects
 from app.modules.campaign_correlator import correlate_incident
 
 router = APIRouter()
 
+_PROBE_ERRORS = (
+    socket.gaierror,
+    urllib.error.URLError,
+    requests.RequestException,
+    ssl.SSLError,
+    OSError,
+    TimeoutError,
+)
+_HIGH_RISK_TLDS = {
+    "buzz",
+    "click",
+    "icu",
+    "info",
+    "link",
+    "live",
+    "online",
+    "rest",
+    "site",
+    "support",
+    "top",
+    "work",
+    "xyz",
+}
+
+
 def resolve_incident_ip(domain: str) -> Optional[str]:
     if not domain:
         return None
     try:
+        return str(ipaddress.ip_address(domain))
+    except ValueError:
+        pass
+    try:
         return socket.gethostbyname(domain)
-    except socket.gaierror:
+    except (socket.gaierror, OSError):
         return None
 
 
@@ -55,41 +87,86 @@ def check_urlhaus_feed(target_url: str) -> Dict[str, Any]:
                     "threat": data.get("threat", "Malicious URL"),
                     "tags": data.get("tags", [])
                 }
-    except Exception:
+    except (requests.RequestException, ValueError):
         pass
     return {"is_listed": False, "threat": None, "tags": []}
+
 
 @router.post("/analyze/url", response_model=ThreatAnalysisResponse)
 async def analyze_url_endpoint(payload: URLAnalysisRequest):
     # 1. Deterministic SSRF Guard
     target_url = validate_target_url(payload.url)
-    
+
+    parsed_domain = urllib.parse.urlsplit(target_url).hostname or ""
+    resolved_ip = resolve_incident_ip(parsed_domain)
+
     # 2. TLS / Certificate Trust Inspector
-    tls_data = inspect_tls_certificate(target_url)
-    
+    try:
+        tls_data = inspect_tls_certificate(target_url)
+    except _PROBE_ERRORS as exc:
+        tls_data = {
+            "is_valid": False,
+            "subject": None,
+            "issuer": None,
+            "expiry_date": None,
+            "san_matches": False,
+            "is_untrusted_ca": False,
+            "notes": [f"Connection unavailable: {type(exc).__name__}"],
+            "error": "Target host unavailable",
+        }
+
     # 3. Live Threat Feed Lookup
     feed_data = check_urlhaus_feed(target_url)
-    
+
     # 4. Passive Structural Heuristics & Typosquatting
     url_analysis = analyze_url_structure(target_url)
-    redirect_chain = trace_redirects(target_url, max_hops=3, timeout=3.0)
-    
+    try:
+        redirect_chain = trace_redirects(target_url, max_hops=3, timeout=3.0)
+    except _PROBE_ERRORS:
+        redirect_chain = []
+
     # 5. Passive Security Header Audit
-    headers_audit = audit_security_headers(target_url, timeout=3.0)
+    try:
+        headers_audit = audit_security_headers(target_url, timeout=3.0)
+    except _PROBE_ERRORS as exc:
+        headers_audit = {
+            "missing_headers": [
+                "Strict-Transport-Security",
+                "Content-Security-Policy",
+                "X-Frame-Options",
+                "X-Content-Type-Options",
+            ],
+            "exposed_server": None,
+            "exposed_powered_by": None,
+            "error": f"Connection unavailable: {type(exc).__name__}",
+        }
 
     score = 10.0
     indicators: List[str] = []
-    
+
     # DNS / Reachability check
-    if tls_data.get("error") and "Could not resolve" in str(tls_data.get("error")):
+    tls_notes = " ".join(str(note) for note in tls_data.get("notes", []))
+    host_unreachable = (
+        resolved_ip is None
+        or tls_data.get("error") == "Target host unavailable"
+        or "timed out" in tls_notes.lower()
+        or "connection failure" in tls_notes.lower()
+        or headers_audit.get("error") == "Request failed"
+    )
+    if host_unreachable:
+        score += 45.0
+        indicators.append(
+            "Target host appears unreachable, inactive, or unresolvable at scan time"
+        )
+    elif tls_data.get("error") and "Could not resolve" in str(tls_data.get("error")):
         score += 45.0
         indicators.append("Domain does not resolve via public DNS (potentially sinkholed, inactive, or malformed)")
-    
+
     # Feed hits trigger confirmed malicious classification
     if feed_data.get("is_listed"):
         score = 95.0
         indicators.append(f"Blacklist Match: URLhaus tagged as {feed_data.get('threat')}")
-    
+
     if not tls_data.get("is_valid") and not (tls_data.get("error") and "resolve" in str(tls_data.get("error"))):
         score += 40.0
         indicators.append("Invalid or unverified SSL/TLS Certificate")
@@ -115,6 +192,11 @@ async def analyze_url_endpoint(payload: URLAnalysisRequest):
         score += 15.0
         indicators.append(f"High domain randomness/entropy ({url_analysis.get('entropy_score'):.2f}) indicative of DGA")
 
+    tld = parsed_domain.rsplit(".", 1)[-1].lower() if "." in parsed_domain else ""
+    if tld in _HIGH_RISK_TLDS:
+        score += 10.0
+        indicators.append(f"Uses a high-risk top-level domain (TLD: .{tld})")
+
     for flag in url_analysis.get("suspicious_flags", []):
         if flag in {"excessive_subdomains", "embedded_credentials"} and flag not in indicators:
             score += 10.0
@@ -135,7 +217,6 @@ async def analyze_url_endpoint(payload: URLAnalysisRequest):
     }
 
     # Certificate Transparency (CT) logging audit
-    parsed_domain = urllib.parse.urlparse(target_url).hostname or ""
     ct_audit = check_certificate_transparency(parsed_domain)
     if ct_audit.get("ct_logged") is False and "error" in ct_audit:
         if "No Certificate Transparency records" in ct_audit["error"]:
@@ -191,7 +272,7 @@ async def analyze_url_endpoint(payload: URLAnalysisRequest):
         "target": target_url,
         "target_domain": parsed_domain,
         "brand_targeted": url_analysis.get("matched_brand"),
-        "resolved_ip": resolve_incident_ip(parsed_domain),
+        "resolved_ip": resolved_ip,
         "indicators": indicators,
     })
 
@@ -210,7 +291,8 @@ async def analyze_url_endpoint(payload: URLAnalysisRequest):
 
 @router.post("/analyze/message", response_model=ThreatAnalysisResponse)
 async def analyze_message_endpoint(payload: MessageAnalysisRequest):
-    ai_result = analyze_scam_with_ai(payload.content, payload.context or "SMS/Email")
+    cleaned_content = sanitize_message_content(payload.content)
+    ai_result = analyze_scam_with_ai(cleaned_content, payload.context or "SMS/Email")
     
     score = 10.0
     indicators: List[str] = []
@@ -224,12 +306,18 @@ async def analyze_message_endpoint(payload: MessageAnalysisRequest):
         indicators.append("High urgency and psychological coercion")
         
     red_flags = ai_result.get("red_flags", [])
+    if not isinstance(red_flags, list):
+        red_flags = [str(red_flags)] if red_flags else []
     for rf in red_flags:
         if rf not in indicators:
             indicators.append(rf)
             
     entities = ai_result.get("extracted_entities", {})
+    if not isinstance(entities, dict):
+        entities = {}
     extracted_urls = entities.get("extracted_urls", [])
+    if not isinstance(extracted_urls, list):
+        extracted_urls = []
     if entities.get("extracted_urls"):
         score += 15.0
         indicators.append(f"Contains external link: {', '.join(entities['extracted_urls'])}")
@@ -254,7 +342,10 @@ async def analyze_message_endpoint(payload: MessageAnalysisRequest):
 
     message_domain = None
     if extracted_urls:
-        message_domain = urllib.parse.urlparse(extracted_urls[0]).hostname
+        try:
+            message_domain = urllib.parse.urlsplit(extracted_urls[0]).hostname
+        except ValueError:
+            message_domain = None
     brand_targeted = ai_result.get("impersonated_brand")
     campaign_correlation = correlate_incident({
         "target": extracted_urls[0] if extracted_urls else "Pasted Message",
