@@ -39,6 +39,7 @@ class ThreatAnalysisResponse(BaseModel):
     risk_level: RiskClassification
     confidence_score: float = Field(..., ge=0.0, le=1.0)
     summary: str
+    campaign_correlation: Dict[str, Any] = Field(default_factory=dict)
     detected_indicators: List[str] = []
     technical_evidence: Dict[str, Any] = {}
     recommended_actions: List[str] = []

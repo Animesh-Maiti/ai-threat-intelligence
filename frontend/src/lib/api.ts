@@ -10,6 +10,13 @@ export interface ThreatAnalysisResponse {
   risk_level: RiskLevel;
   confidence_score: number;
   summary: string;
+  campaign_correlation?: {
+    is_campaign: boolean;
+    campaign_id: string | null;
+    related_reports_count: number;
+    correlated_indicators: string[];
+    explanation: string;
+  };
   detected_indicators: string[];
   technical_evidence: Record<string, any>;
   recommended_actions: string[];

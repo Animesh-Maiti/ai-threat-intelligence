@@ -5,9 +5,10 @@ from app.modules.extended_auditor import (
 )
 from app.modules.web3_logger import record_threat_on_chain
 import hashlib
+import socket
 import time
 import urllib.parse
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import requests
 from fastapi import APIRouter
 
@@ -22,8 +23,18 @@ from app.modules.tls_inspector import inspect_tls_certificate
 from app.modules.scam_analyzer import analyze_scam_with_ai
 from app.modules.header_auditor import audit_security_headers
 from app.modules.url_analyzer import analyze_url_structure, trace_redirects
+from app.modules.campaign_correlator import correlate_incident
 
 router = APIRouter()
+
+def resolve_incident_ip(domain: str) -> Optional[str]:
+    if not domain:
+        return None
+    try:
+        return socket.gethostbyname(domain)
+    except socket.gaierror:
+        return None
+
 
 def compute_report_hash(target: str, risk: str, summary: str) -> str:
     payload = f"{target}|{risk}|{summary}|{int(time.time())}"
@@ -176,11 +187,20 @@ async def analyze_url_endpoint(payload: URLAnalysisRequest):
         confidence_score=round(min(score / 100.0, 1.0), 2)
     )
 
+    campaign_correlation = correlate_incident({
+        "target": target_url,
+        "target_domain": parsed_domain,
+        "brand_targeted": url_analysis.get("matched_brand"),
+        "resolved_ip": resolve_incident_ip(parsed_domain),
+        "indicators": indicators,
+    })
+
     return ThreatAnalysisResponse(
         target=target_url,
         risk_level=risk,
         confidence_score=round(min(score / 100.0, 1.0), 2),
         summary=summary,
+        campaign_correlation=campaign_correlation,
         detected_indicators=indicators,
         technical_evidence=technical_evidence,
         recommended_actions=recommended,
@@ -209,6 +229,7 @@ async def analyze_message_endpoint(payload: MessageAnalysisRequest):
             indicators.append(rf)
             
     entities = ai_result.get("extracted_entities", {})
+    extracted_urls = entities.get("extracted_urls", [])
     if entities.get("extracted_urls"):
         score += 15.0
         indicators.append(f"Contains external link: {', '.join(entities['extracted_urls'])}")
@@ -231,11 +252,24 @@ async def analyze_message_endpoint(payload: MessageAnalysisRequest):
         confidence_score=round(min(score / 100.0, 1.0), 2)
     )
 
+    message_domain = None
+    if extracted_urls:
+        message_domain = urllib.parse.urlparse(extracted_urls[0]).hostname
+    brand_targeted = ai_result.get("impersonated_brand")
+    campaign_correlation = correlate_incident({
+        "target": extracted_urls[0] if extracted_urls else "Pasted Message",
+        "target_domain": message_domain,
+        "brand_targeted": brand_targeted,
+        "resolved_ip": resolve_incident_ip(message_domain or ""),
+        "indicators": indicators,
+    })
+
     return ThreatAnalysisResponse(
         target="Pasted Message",
         risk_level=risk,
         confidence_score=round(min(score / 100.0, 1.0), 2),
         summary=summary,
+        campaign_correlation=campaign_correlation,
         detected_indicators=indicators,
         technical_evidence=ai_result,
         recommended_actions=[
