@@ -381,12 +381,9 @@ export default function ThreatDashboard() {
             ⚡ Powered by AI Intelligence
           </div>
           <p className="mt-1.5 pl-4 text-[11px] text-emerald-700">
-            Scanner services are online
+            TrustGuard Platform · Online
           </p>
         </div>
-        <p className="mt-4 px-2 text-[11px] text-slate-400">
-          HackMatrix26 · Threat Intelligence
-        </p>
       </aside>
 
       <div className="min-h-screen lg:pl-[270px]">
@@ -1003,8 +1000,8 @@ export default function ThreatDashboard() {
           )}
 
           <footer className="mt-10 flex flex-col justify-between gap-2 border-t border-slate-200 pt-5 text-xs text-slate-400 sm:flex-row">
-            <span>TrustGuard · HackMatrix26 Threat Intelligence</span>
-            <span>Scan carefully. Verify independently.</span>
+            <span>TrustGuard Engine v1.0.0 · Threat Intelligence Active</span>
+            <span>© 2026 TrustGuard AI. All rights reserved.</span>
           </footer>
         </main>
       </div>
