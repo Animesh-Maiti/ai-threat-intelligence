@@ -497,12 +497,48 @@ export default function ThreatDashboard() {
               {/* Card 2: Plain English Findings & Practical Advice */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 {analysisResult.campaign_correlation?.is_campaign && (
-                  <div
-                    role="alert"
-                    className="md:col-span-2 rounded-xl border border-amber-700/70 bg-amber-950/50 p-4 text-sm text-amber-200"
-                  >
-                    ⚠️ Coordinated Fraud Campaign Detected (ID: {analysisResult.campaign_correlation.campaign_id}) — {analysisResult.campaign_correlation.related_reports_count} previous reports share this infrastructure/brand pattern.
-                  </div>
+                  (() => {
+                    const evidence = analysisResult.technical_evidence;
+                    const campaignBrand =
+                      evidence?.url_structure?.matched_brand ||
+                      evidence?.impersonated_brand;
+                    const normalizedBrand =
+                      typeof campaignBrand === "string" &&
+                      !["", "unknown", "unspecified", "financial / institutional entity"].includes(
+                        campaignBrand.trim().toLowerCase()
+                      )
+                        ? campaignBrand
+                        : "this organization";
+
+                    return (
+                      <div
+                        role="alert"
+                        className="md:col-span-2 rounded-2xl border border-amber-500/40 bg-gradient-to-r from-amber-950/40 via-red-950/30 to-zinc-950 p-5 text-amber-100 shadow-[0_0_30px_rgba(244,63,94,0.12)]"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <h3 className="flex items-center gap-2 text-base font-extrabold tracking-wide text-amber-100">
+                            <span
+                              aria-hidden="true"
+                              className="h-2.5 w-2.5 animate-pulse rounded-full bg-rose-400 shadow-[0_0_12px_rgba(251,113,133,0.9)]"
+                            />
+                            🚨 Large Scam Ring Detected
+                          </h3>
+                          {analysisResult.campaign_correlation.campaign_id && (
+                            <span className="rounded-full border border-amber-400/40 bg-amber-400/10 px-3 py-1 font-mono text-xs font-bold text-amber-200 shadow-[0_0_12px_rgba(251,191,36,0.12)]">
+                              Campaign ID: {analysisResult.campaign_correlation.campaign_id}
+                            </span>
+                          )}
+                        </div>
+                        <p className="mt-3 text-sm leading-relaxed text-zinc-200">
+                          We have linked this link to an active wave targeting {normalizedBrand}.{" "}
+                          <span className="mx-1 inline-flex rounded-full border border-rose-400/40 bg-rose-400/10 px-2.5 py-0.5 font-bold tabular-nums text-rose-200 shadow-[0_0_12px_rgba(251,113,133,0.15)]">
+                            {analysisResult.campaign_correlation.related_reports_count}
+                          </span>{" "}
+                          people have recently flagged identical attacks.
+                        </p>
+                      </div>
+                    );
+                  })()
                 )}
                 {/* Findings in Plain Language */}
                 <div className="bg-zinc-950 border border-zinc-800 rounded-2xl p-6">

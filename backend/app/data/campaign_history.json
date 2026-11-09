@@ -1,0 +1,95 @@
+[
+  {
+    "target": "http://sbi-login-portal-01.top",
+    "target_domain": "sbi-login-portal-01.top",
+    "brand_targeted": null,
+    "resolved_ip": null,
+    "indicators": [
+      "Invalid or unverified SSL/TLS Certificate",
+      "Lacks critical defensive headers: Strict-Transport-Security, Content-Security-Policy"
+    ],
+    "timestamp": "2026-11-09T15:53:18.476462+00:00"
+  },
+  {
+    "target": "http://sbi-verification-notice.top",
+    "target_domain": "sbi-verification-notice.top",
+    "brand_targeted": null,
+    "resolved_ip": null,
+    "indicators": [
+      "Invalid or unverified SSL/TLS Certificate",
+      "Lacks critical defensive headers: Strict-Transport-Security, Content-Security-Policy"
+    ],
+    "timestamp": "2026-11-09T15:53:24.665883+00:00"
+  },
+  {
+    "target": "http://sbi-kyc-reactivate.top",
+    "target_domain": "sbi-kyc-reactivate.top",
+    "brand_targeted": null,
+    "resolved_ip": null,
+    "indicators": [
+      "Invalid or unverified SSL/TLS Certificate",
+      "Lacks critical defensive headers: Strict-Transport-Security, Content-Security-Policy"
+    ],
+    "timestamp": "2026-11-09T15:53:31.117976+00:00"
+  },
+  {
+    "target": "http://sbi-login-portal-01.top",
+    "target_domain": "sbi-login-portal-01.top",
+    "brand_targeted": "SBI",
+    "resolved_ip": null,
+    "indicators": [
+      "Invalid or unverified SSL/TLS Certificate",
+      "Lacks critical defensive headers: Strict-Transport-Security, Content-Security-Policy"
+    ],
+    "timestamp": "2026-11-09T16:00:55.466304+00:00",
+    "campaign_id": "CAMP-SBI-PHISH-01"
+  },
+  {
+    "target": "http://sbi-verification-notice.top",
+    "target_domain": "sbi-verification-notice.top",
+    "brand_targeted": "SBI",
+    "resolved_ip": null,
+    "indicators": [
+      "Invalid or unverified SSL/TLS Certificate",
+      "Lacks critical defensive headers: Strict-Transport-Security, Content-Security-Policy"
+    ],
+    "timestamp": "2026-11-09T16:01:01.625331+00:00",
+    "campaign_id": "CAMP-SBI-PHISH-01"
+  },
+  {
+    "target": "http://sbi-kyc-reactivate.top",
+    "target_domain": "sbi-kyc-reactivate.top",
+    "brand_targeted": "SBI",
+    "resolved_ip": null,
+    "indicators": [
+      "Invalid or unverified SSL/TLS Certificate",
+      "Lacks critical defensive headers: Strict-Transport-Security, Content-Security-Policy"
+    ],
+    "timestamp": "2026-11-09T16:01:08.303152+00:00",
+    "campaign_id": "CAMP-SBI-PHISH-01"
+  },
+  {
+    "target": "http://sbi-kyc-reactivate.top",
+    "target_domain": "sbi-kyc-reactivate.top",
+    "brand_targeted": "SBI",
+    "resolved_ip": null,
+    "indicators": [
+      "Invalid or unverified SSL/TLS Certificate",
+      "Lacks critical defensive headers: Strict-Transport-Security, Content-Security-Policy"
+    ],
+    "timestamp": "2026-11-09T16:01:53.228269+00:00",
+    "campaign_id": "CAMP-SBI-PHISH-01"
+  },
+  {
+    "target": "http://sbi-kyc-reactivate.top",
+    "target_domain": "sbi-kyc-reactivate.top",
+    "brand_targeted": "SBI",
+    "resolved_ip": null,
+    "indicators": [
+      "Invalid or unverified SSL/TLS Certificate",
+      "Lacks critical defensive headers: Strict-Transport-Security, Content-Security-Policy"
+    ],
+    "timestamp": "2026-11-09T16:16:26.248468+00:00",
+    "campaign_id": "CAMP-SBI-PHISH-01"
+  }
+]

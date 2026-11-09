@@ -17,6 +17,20 @@ HISTORY_FILE = Path(__file__).resolve().parents[1] / "data" / "campaign_history.
 _HISTORY_LOCK = threading.RLock()
 _HISTORY_CACHE: Optional[List[Dict[str, Any]]] = None
 
+_KNOWN_BRANDS = (
+    "sbi",
+    "hdfc",
+    "icici",
+    "axis",
+    "pnb",
+    "paytm",
+    "google",
+    "microsoft",
+    "apple",
+    "amazon",
+    "netflix",
+)
+
 _MULTI_LABEL_SUFFIXES = {
     "ac.in",
     "co.in",
@@ -37,6 +51,7 @@ _MULTI_LABEL_SUFFIXES = {
 }
 _NON_SPECIFIC_BRANDS = {
     "",
+    "none",
     "unknown",
     "unspecified",
     "financial / institutional entity",
@@ -81,6 +96,19 @@ def _normalize_brand(value: Any) -> Optional[str]:
     if brand.casefold() in _NON_SPECIFIC_BRANDS:
         return None
     return brand.casefold()
+
+
+def _extract_brand(target: str, domain: str, existing_brand: Optional[str]) -> Optional[str]:
+    if isinstance(existing_brand, str):
+        brand = existing_brand.strip()
+        if brand.casefold() not in _NON_SPECIFIC_BRANDS:
+            return brand.upper()
+
+    searchable_text = f"{target or ''} {domain or ''}".casefold()
+    for known_brand in _KNOWN_BRANDS:
+        if known_brand in searchable_text:
+            return known_brand.upper()
+    return None
 
 
 def _campaign_id(
@@ -130,8 +158,15 @@ def _matches(
     apex_domain: Optional[str],
     resolved_ip: Optional[str],
 ) -> bool:
-    record_brand = _normalize_brand(record.get("brand_targeted"))
-    record_domain = _apex_domain(_normalize_domain(record.get("target_domain")))
+    record_domain_value = _normalize_domain(record.get("target_domain"))
+    record_brand = _normalize_brand(
+        _extract_brand(
+            record.get("target", ""),
+            record_domain_value or "",
+            record.get("brand_targeted"),
+        )
+    )
+    record_domain = _apex_domain(record_domain_value)
     record_ip = record.get("resolved_ip")
     return bool(
         (brand and record_brand == brand)
@@ -140,20 +175,25 @@ def _matches(
     )
 
 
-def correlate_incident(target_data: dict) -> dict:
+def correlate_incident(incident_data: dict) -> dict:
     """Record an incident and return its correlation with prior reports."""
     global _HISTORY_CACHE
 
-    target_domain = _normalize_domain(target_data.get("target_domain"))
-    brand = _normalize_brand(target_data.get("brand_targeted"))
-    resolved_ip = target_data.get("resolved_ip")
+    target_domain = _normalize_domain(incident_data.get("target_domain"))
+    resolved_brand = _extract_brand(
+        incident_data.get("target", ""),
+        target_domain or "",
+        incident_data.get("brand_targeted"),
+    )
+    brand = _normalize_brand(resolved_brand)
+    resolved_ip = incident_data.get("resolved_ip")
     if not isinstance(resolved_ip, str) or not resolved_ip.strip():
         resolved_ip = None
     else:
         resolved_ip = resolved_ip.strip()
 
     apex_domain = _apex_domain(target_domain)
-    indicators = target_data.get("indicators", [])
+    indicators = incident_data.get("indicators", [])
     if not isinstance(indicators, list):
         indicators = []
 
@@ -175,7 +215,7 @@ def correlate_incident(target_data: dict) -> dict:
                 (record["campaign_id"] for record in matches if record.get("campaign_id")),
                 _campaign_id(brand, apex_domain, resolved_ip),
             )
-            group_label = (target_data.get("brand_targeted") or apex_domain or "this infrastructure")
+            group_label = resolved_brand or apex_domain or "this infrastructure"
             distinct_domains = {
                 domain
                 for domain in (
@@ -201,9 +241,9 @@ def correlate_incident(target_data: dict) -> dict:
             )
 
         record = {
-            "target": target_data.get("target"),
+            "target": incident_data.get("target"),
             "target_domain": target_domain,
-            "brand_targeted": target_data.get("brand_targeted"),
+            "brand_targeted": resolved_brand,
             "resolved_ip": resolved_ip,
             "indicators": indicators,
             "timestamp": datetime.now(timezone.utc).isoformat(),
