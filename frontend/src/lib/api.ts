@@ -31,29 +31,27 @@ export interface VerificationResponse {
   audit_data: Record<string, any> | null;
 }
 
-const API_BASE_URL = 
-    process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+const configuredApiOrigin = (
+  process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"
+).replace(/\/+$/, "");
+const API_BASE_URL = /\/api\/v1$/i.test(configuredApiOrigin)
+  ? configuredApiOrigin
+  : `${configuredApiOrigin}/api/v1`;
 
-export async function analyzeUrl(url: string): Promise<ThreatAnalysisResponse> {
+async function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init: RequestInit = {}
+): Promise<Response> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 25_000);
   try {
-    const response = await fetch(`${API_BASE_URL}/analyze/url`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url }),
+    return await fetch(input, {
+      ...init,
       signal: controller.signal,
     });
-
-    if (!response.ok) {
-      const errorBody = await response.json().catch(() => ({}));
-      throw new Error(errorBody.detail || `Request failed with status ${response.status}`);
-    }
-
-    return await response.json();
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
-      throw new Error("The scan is taking longer than expected. Please try again.");
+      throw new Error("The request is taking longer than expected. Please try again.");
     }
     throw error;
   } finally {
@@ -61,33 +59,38 @@ export async function analyzeUrl(url: string): Promise<ThreatAnalysisResponse> {
   }
 }
 
+async function parseResponse<T>(response: Response): Promise<T> {
+  if (!response.ok) {
+    const errorBody = await response.json().catch(() => ({}));
+    throw new Error(errorBody.detail || `Request failed with status ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function analyzeUrl(url: string): Promise<ThreatAnalysisResponse> {
+  const response = await fetchWithTimeout(`${API_BASE_URL}/analyze/url`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url }),
+  });
+  return parseResponse<ThreatAnalysisResponse>(response);
+}
+
 export async function analyzeMessage(
   content: string,
   context: string = "SMS/Email"
 ): Promise<ThreatAnalysisResponse> {
-  const response = await fetch(`${API_BASE_URL}/analyze/message`, {
+  const response = await fetchWithTimeout(`${API_BASE_URL}/analyze/message`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ content, context }),
   });
-
-  if (!response.ok) {
-    const errorBody = await response.json().catch(() => ({}));
-    throw new Error(errorBody.detail || `Request failed with status ${response.status}`);
-  }
-
-  return response.json();
+  return parseResponse<ThreatAnalysisResponse>(response);
 }
 
 export async function verifyHash(hash: string): Promise<VerificationResponse> {
-  const response = await fetch(
+  const response = await fetchWithTimeout(
     `${API_BASE_URL}/verify/hash/${encodeURIComponent(hash)}`
   );
-
-  if (!response.ok) {
-    const errorBody = await response.json().catch(() => ({}));
-    throw new Error(errorBody.detail || `Request failed with status ${response.status}`);
-  }
-
-  return response.json();
+  return parseResponse<VerificationResponse>(response);
 }

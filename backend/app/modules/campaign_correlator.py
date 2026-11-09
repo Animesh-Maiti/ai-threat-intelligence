@@ -17,6 +17,11 @@ HISTORY_FILE = Path(__file__).resolve().parents[1] / "data" / "campaign_history.
 _HISTORY_LOCK = threading.RLock()
 _HISTORY_CACHE: Optional[List[Dict[str, Any]]] = None
 
+
+def ensure_history_directory() -> None:
+    os.makedirs(HISTORY_FILE.parent, exist_ok=True)
+
+
 _KNOWN_BRANDS = (
     "sbi",
     "hdfc",

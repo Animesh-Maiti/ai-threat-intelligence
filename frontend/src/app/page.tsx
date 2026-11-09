@@ -10,6 +10,8 @@ import {
 } from "@/lib/api";
 
 type ScanMode = "url" | "message" | "verify";
+const CONNECTION_STATUS =
+  "Connecting to threat intelligence engine... (if this is the first scan, the free cloud service may take 15-30s to wake up)";
 
 interface RecentScan {
   id: string;
@@ -158,7 +160,7 @@ export default function ThreatDashboard() {
     } catch (scanError) {
       setError(
         scanError instanceof TypeError
-          ? "We couldn't connect to the scanner. Please check that the backend is running."
+          ? CONNECTION_STATUS
           : scanError instanceof Error
             ? scanError.message
             : "We couldn't analyze that website address. Please try again."
@@ -195,7 +197,7 @@ export default function ThreatDashboard() {
     } catch (scanError) {
       setError(
         scanError instanceof TypeError
-          ? "We couldn't connect to the scanner. Please check that the backend is running."
+          ? CONNECTION_STATUS
           : scanError instanceof Error
             ? scanError.message
             : "We couldn't analyze that message. Please try again."
@@ -219,7 +221,7 @@ export default function ThreatDashboard() {
     } catch (verifyError) {
       setError(
         verifyError instanceof TypeError
-          ? "We couldn't connect to the scanner. Please check that the backend is running."
+          ? CONNECTION_STATUS
           : verifyError instanceof Error
             ? verifyError.message
             : "Ledger verification lookup failed. Please try again."
@@ -347,6 +349,7 @@ export default function ThreatDashboard() {
                 <button
                   key={item.label}
                   onClick={item.action}
+                  disabled={loading}
                   className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-medium transition ${
                     active
                       ? "bg-blue-50 text-blue-700"
@@ -458,6 +461,7 @@ export default function ThreatDashboard() {
                   ).map(([mode, label]) => (
                     <button
                       key={mode}
+                      disabled={loading}
                       onClick={() => clearResults(mode)}
                       className={`rounded-xl px-3 py-2 text-xs font-semibold transition sm:px-4 sm:text-sm ${
                         activeTab === mode
@@ -483,6 +487,7 @@ export default function ThreatDashboard() {
                     <input
                       id="url-input"
                       value={urlInput}
+                      disabled={loading}
                       onChange={(event) => setUrlInput(event.target.value)}
                       placeholder="Paste a website URL or enter a domain"
                       className="min-w-0 flex-1 bg-transparent px-3 py-3 text-sm text-slate-800 outline-none placeholder:text-slate-400 sm:px-1"
@@ -515,6 +520,7 @@ export default function ThreatDashboard() {
                     id="message-input"
                     rows={4}
                     value={messageInput}
+                    disabled={loading}
                     onChange={(event) => setMessageInput(event.target.value)}
                     placeholder="Paste SMS, WhatsApp forwards, emails, or messages with suspicious links…"
                     className="w-full resize-y rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-800 outline-none placeholder:text-slate-400 focus:border-blue-300 focus:ring-4 focus:ring-blue-50"
@@ -525,7 +531,14 @@ export default function ThreatDashboard() {
                       disabled={loading}
                       className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:opacity-60"
                     >
-                      {loading ? "Analyzing message…" : "Analyze Message →"}
+                      {loading ? (
+                        <>
+                          <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                          Analyzing message…
+                        </>
+                      ) : (
+                        "Analyze Message →"
+                      )}
                     </button>
                   </div>
                 </form>
@@ -541,6 +554,7 @@ export default function ThreatDashboard() {
                     <input
                       id="verify-input"
                       value={hashInput}
+                      disabled={loading}
                       onChange={(event) => setHashInput(event.target.value)}
                       placeholder="Paste report hash"
                       className="min-w-0 flex-1 bg-transparent px-3 py-3 font-mono text-sm text-slate-800 outline-none placeholder:font-sans placeholder:text-slate-400 sm:px-1"
@@ -548,9 +562,16 @@ export default function ThreatDashboard() {
                     />
                     <button
                       disabled={loading}
-                      className="rounded-xl bg-blue-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:opacity-60"
+                      className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:opacity-60"
                     >
-                      {loading ? "Verifying…" : "Verify Record →"}
+                      {loading ? (
+                        <>
+                          <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                          Verifying…
+                        </>
+                      ) : (
+                        "Verify Record →"
+                      )}
                     </button>
                   </div>
                 </form>
@@ -563,6 +584,7 @@ export default function ThreatDashboard() {
                 <button
                   type="button"
                   onClick={pasteFromClipboard}
+                  disabled={loading}
                   className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:border-blue-200 hover:text-blue-700"
                 >
                   ⎘ Paste from Clipboard
@@ -572,6 +594,7 @@ export default function ThreatDashboard() {
                     <button
                       type="button"
                       onClick={() => void runUrlScan("https://adamasuniversity.ac.in")}
+                      disabled={loading}
                       className="rounded-full border border-emerald-100 bg-emerald-50/70 px-3 py-1.5 text-xs font-medium text-emerald-700 transition hover:bg-emerald-100"
                     >
                       Test Benign (Adamas)
@@ -579,11 +602,17 @@ export default function ThreatDashboard() {
                     <button
                       type="button"
                       onClick={() => void runUrlScan("http://sbi-kyc-reactivate.top")}
+                      disabled={loading}
                       className="rounded-full border border-rose-100 bg-rose-50/70 px-3 py-1.5 text-xs font-medium text-rose-700 transition hover:bg-rose-100"
                     >
                       Test Phishing (SBI Scam)
                     </button>
                   </>
+                )}
+                {loading && (
+                  <p role="status" className="w-full pt-1 text-xs text-blue-700">
+                    {CONNECTION_STATUS}
+                  </p>
                 )}
               </div>
 
@@ -848,6 +877,7 @@ export default function ThreatDashboard() {
               <section className="mt-8 grid gap-4 md:grid-cols-3">
                 <button
                   type="button"
+                  disabled={loading}
                   onClick={() => switchTabAndFocus("url", "url-input")}
                   className="rounded-2xl border border-emerald-100 bg-white p-5 text-left shadow-sm cursor-pointer transition-all duration-200 hover:-translate-y-1 hover:shadow-md hover:border-emerald-300"
                 >
@@ -859,6 +889,7 @@ export default function ThreatDashboard() {
                 </button>
                 <button
                   type="button"
+                  disabled={loading}
                   onClick={() => switchTabAndFocus("message", "message-input")}
                   className="rounded-2xl border border-rose-100 bg-white p-5 text-left shadow-sm cursor-pointer transition-all duration-200 hover:-translate-y-1 hover:shadow-md hover:border-rose-300"
                 >
@@ -870,6 +901,7 @@ export default function ThreatDashboard() {
                 </button>
                 <button
                   type="button"
+                  disabled={loading}
                   onClick={() => switchTabAndFocus("verify", "verify-input")}
                   className="rounded-2xl border border-violet-100 bg-white p-5 text-left shadow-sm cursor-pointer transition-all duration-200 hover:-translate-y-1 hover:shadow-md hover:border-indigo-300"
                 >
