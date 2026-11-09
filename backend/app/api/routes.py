@@ -1,3 +1,4 @@
+from app.modules.web3_logger import record_threat_on_chain
 import hashlib
 import time
 from typing import Dict, Any, List
@@ -130,6 +131,14 @@ async def analyze_url_endpoint(payload: URLAnalysisRequest):
 
     report_hash = compute_report_hash(target_url, risk.value, summary)
 
+    # Record report integrity on-chain
+    tx_hash = record_threat_on_chain(
+        report_sha256=report_hash,
+        target=target_url,
+        risk_level=risk.value,
+        confidence_score=round(min(score / 100.0, 1.0), 2)
+    )
+
     return ThreatAnalysisResponse(
         target=target_url,
         risk_level=risk,
@@ -145,7 +154,7 @@ async def analyze_url_endpoint(payload: URLAnalysisRequest):
         },
         recommended_actions=recommended,
         report_sha256=report_hash,
-        on_chain_tx=None
+        on_chain_tx=tx_hash
     )
 
 @router.post("/analyze/message", response_model=ThreatAnalysisResponse)
@@ -183,6 +192,14 @@ async def analyze_message_endpoint(payload: MessageAnalysisRequest):
     summary = ai_result.get("explanation", "Scam communication assessment complete.")
     report_hash = compute_report_hash("Raw Message Payload", risk.value, summary)
 
+    # Record report integrity on-chain
+    tx_hash = record_threat_on_chain(
+        report_sha256=report_hash,
+        target="Pasted Message",
+        risk_level=risk.value,
+        confidence_score=round(min(score / 100.0, 1.0), 2)
+    )
+
     return ThreatAnalysisResponse(
         target="Pasted Message",
         risk_level=risk,
@@ -195,5 +212,20 @@ async def analyze_message_endpoint(payload: MessageAnalysisRequest):
             "Verify sender identity directly through official support channels."
         ],
         report_sha256=report_hash,
-        on_chain_tx=None
+        on_chain_tx=tx_hash
     )
+
+from app.modules.web3_logger import verify_threat_on_chain
+
+@router.get("/verify/hash/{report_hash}")
+async def verify_report_hash_endpoint(report_hash: str):
+    """
+    Independent ledger lookup verifying report integrity and transaction receipt.
+    """
+    verification = verify_threat_on_chain(report_hash)
+    return {
+        "report_sha256": report_hash,
+        "is_verified": verification.get("verified", False),
+        "on_chain_tx": verification.get("tx_hash"),
+        "audit_data": verification.get("data")
+    }
