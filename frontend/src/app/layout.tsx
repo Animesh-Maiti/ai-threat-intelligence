@@ -2,8 +2,9 @@ import "./globals.css";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "AI-Powered Threat & Digital Trust Intelligence",
-  description: "Web threat correlation and digital trust intelligence platform",
+  title: "SpecterShield AI | Autonomous Threat Intelligence & Ledger",
+  description:
+    "SpecterShield AI provides intelligent web threat analysis and tamper-evident on-chain verification for security reports.",
 };
 
 export default function RootLayout({

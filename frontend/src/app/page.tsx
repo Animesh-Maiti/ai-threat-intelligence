@@ -315,11 +315,11 @@ export default function ThreatDashboard() {
             onClick={() => clearResults("url")}
           >
             <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-600 text-lg font-black text-white shadow-md shadow-blue-600/20">
-              TG
+              SS
             </span>
             <span>
               <span className="block text-lg font-bold tracking-tight text-slate-900">
-                TrustGuard
+                SpecterShield AI
               </span>
               <span className="block text-xs text-slate-500">
                 Browse Safe. Stay Secure.
@@ -381,7 +381,7 @@ export default function ThreatDashboard() {
             ⚡ Powered by AI Intelligence
           </div>
           <p className="mt-1.5 pl-4 text-[11px] text-emerald-700">
-            TrustGuard Platform · Online
+            SpecterShield AI Platform · Online
           </p>
         </div>
       </aside>
@@ -402,10 +402,10 @@ export default function ThreatDashboard() {
             </div>
             <div className="ml-auto flex items-center gap-3">
               <span className="hidden rounded-full border border-blue-100 bg-white px-3 py-1.5 text-xs font-semibold text-blue-700 sm:inline-flex">
-                ✦ AI-Powered Threat Detection
+                ✦ SpecterShield AI Threat Intelligence
               </span>
               <span className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-100 text-sm font-bold text-blue-700">
-                TG
+                SS
               </span>
             </div>
           </div>
@@ -417,7 +417,7 @@ export default function ThreatDashboard() {
         >
           <section className="mb-8">
             <p className="inline-flex items-center gap-2 rounded-full border border-blue-100 bg-white px-3.5 py-1.5 text-xs font-semibold text-blue-700 shadow-sm">
-              <span className="text-blue-500">✦</span> AI-Powered Threat Detection
+              <span className="text-blue-500">✦</span> SpecterShield AI Threat Intelligence
             </p>
             <div className="mt-5 flex flex-col justify-between gap-4 md:flex-row md:items-end">
               <div>
@@ -1000,8 +1000,8 @@ export default function ThreatDashboard() {
           )}
 
           <footer className="mt-10 flex flex-col justify-between gap-2 border-t border-slate-200 pt-5 text-xs text-slate-400 sm:flex-row">
-            <span>TrustGuard Engine v1.0.0 · Threat Intelligence Active</span>
-            <span>© 2026 TrustGuard AI. All rights reserved.</span>
+            <span>SpecterShield Engine v1.0.0 · Threat Intelligence Active</span>
+            <span>© 2026 SpecterShield AI. All rights reserved.</span>
           </footer>
         </main>
       </div>

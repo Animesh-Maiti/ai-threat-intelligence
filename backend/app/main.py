@@ -25,7 +25,8 @@ def _origin_regex(origins: list[str]) -> str | None:
     return rf"^(?:{'|'.join(patterns)})$"
 
 app = FastAPI(
-    title="AI-Powered Web Threat & Digital Trust Intelligence",
+    title="SpecterShield AI API",
+    description="Threat intelligence and verifiable security ledger engine",
     version="1.0.0",
     lifespan=lifespan,
 )
