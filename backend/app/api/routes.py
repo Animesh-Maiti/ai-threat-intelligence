@@ -3,7 +3,7 @@ from app.modules.extended_auditor import (
     audit_server_banner_vulnerabilities,
     inspect_public_metadata_endpoints
 )
-from app.modules.web3_logger import record_threat_on_chain
+from app.modules.web3_logger import record_threat_on_chain, verify_blockchain_record
 import hashlib
 import ipaddress
 import ssl
@@ -465,17 +465,17 @@ async def analyze_message_endpoint(payload: MessageAnalysisRequest):
         on_chain_tx=tx_hash
     )
 
-from app.modules.web3_logger import verify_threat_on_chain
-
 @router.get("/verify/hash/{report_hash}")
 async def verify_report_hash_endpoint(report_hash: str):
     """
     Independent ledger lookup verifying report integrity and transaction receipt.
     """
-    verification = verify_threat_on_chain(report_hash)
+    verification = verify_blockchain_record(report_hash)
+    record = verification.get("record")
     return {
         "report_sha256": report_hash,
         "is_verified": verification.get("verified", False),
         "on_chain_tx": verification.get("tx_hash"),
-        "audit_data": verification.get("data")
+        "record": record,
+        "audit_data": record,
     }
