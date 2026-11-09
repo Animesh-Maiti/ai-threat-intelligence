@@ -39,26 +39,31 @@ SpecterShield AI delivers a unified defensive pipeline that ingests targets, run
 
 ---
 
-### 1. Phishing & Threat Detection Engine
+### 1. Benign Web Reputation & Domain Verification
+Automated allowlist verification and TLS certificate integrity checks confirming legitimate web properties:
+
+![SpecterShield AI Benign Scan](docs/screenshots/safe-url-scan.png.png)
+
+---
+
+### 2. Phishing & Threat Detection Engine
 Real-time URL threat triage identifying suspicious infrastructure, domain entropy, and brand impersonation attacks:
 
-![SpecterShield AI Threat Detection](docs/screenshots/phishing-alert.png)
+![SpecterShield AI Threat Detection](docs/screenshots/phishing-alert.png.png)
 
 ---
 
-### 2. AI Message & SMS Scam Deobfuscation
+### 3. AI Message & SMS Scam Deobfuscation
 Google Gemini AI analyzing coercive banking scam messages, defanging malicious vectors, and flagging deceptive intent:
 
-![AI Message Scam Detection](docs/screenshots/ai-scam-analysis.png)
+![AI Message Scam Detection](docs/screenshots/ai-scam-analysis.png.png)
 
 ---
 
-### 3. Immutable Blockchain Ledger Verification
+### 4. Immutable Blockchain Ledger Verification
 Cryptographic SHA-256 integrity lookup verifying tamper-proof incident provenance and ledger transaction receipts:
 
-![Blockchain Ledger Verification](docs/screenshots/blockchain-ledger-verification.png)
----
-
+![Blockchain Ledger Verification](docs/screenshots/blockchain-ledger-verification.png.png)
 ## 5. Tech Stack
 
 ### Frontend
